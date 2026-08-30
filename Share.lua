@@ -28,11 +28,29 @@ local function InParty()
   return (GetNumPartyMembers and GetNumPartyMembers() or 0) > 0
 end
 
+local function SanitizeAddonText(s)
+  s = tostring(s or "")
+  s = string.gsub(s, "|", "/")
+  s = string.gsub(s, "%%", "/")
+  s = string.gsub(s, "	", " ")
+  s = string.gsub(s, "~", "-")
+  return s
+end
+
 local function SafeSend(msg)
   if not SendAddonMessage then return end
   if not InParty() then return end
-  -- 1.12 private servers usually accept PARTY channel
-  SendAddonMessage(PREFIX, msg, "PARTY")
+  if not msg or msg == "" then return end
+  -- DFRL / some 1.12 clients parse addon payloads like chat (|T texture, % escapes).
+  if string.find(msg, "|", 1, true) or string.find(msg, "%%", 1, true) then
+    msg = string.gsub(msg, "|", "/")
+    msg = string.gsub(msg, "%%", "/")
+  end
+  if pcall then
+    pcall(SendAddonMessage, PREFIX, msg, "PARTY")
+  else
+    SendAddonMessage(PREFIX, msg, "PARTY")
+  end
 end
 
 function Share:QuestKey(title, questID)
@@ -51,17 +69,16 @@ function Share:BuildPayload()
       -- Format: Q|<title>|<complete 0/1>|<objText>~<0/1>|...
       local parts = {}
       table.insert(parts, "Q")
-      -- wrap gsub: it returns (str, count); 3-arg insert would treat the title as an index
-      table.insert(parts, (string.gsub(q.title, "|", "/")))
+      table.insert(parts, SanitizeAddonText(q.title))
       table.insert(parts, q.complete and "1" or "0")
       if q.objectives then
         for _, obj in ipairs(q.objectives) do
-          local t = string.gsub(obj.text or "", "|", "/")
-          t = string.gsub(t, "~", "-")
-          table.insert(parts, t .. "~" .. (obj.finished and "1" or "0"))
+          local ot = SanitizeAddonText(obj.text or "")
+          table.insert(parts, ot .. "~" .. (obj.finished and "1" or "0"))
         end
       end
-      local msg = table.concat(parts, "|")
+      -- Tab delimiter: "|" + "The ..." becomes "|T..." which 1.12 treats as a texture escape.
+      local msg = table.concat(parts, "	")
       -- Keep under typical addon message limits
       if string.len(msg) > 240 then
         msg = string.sub(msg, 1, 240)
@@ -92,11 +109,19 @@ end
 
 function Share:ParseMessage(sender, msg)
   if not msg or not sender then return end
-  if string.sub(msg, 1, 2) ~= "Q|" then return end
+  local sep = "	"
+  if string.sub(msg, 1, 2) == "Q	" then
+    sep = "	"
+  elseif string.sub(msg, 1, 2) == "Q|" then
+    sep = "|"
+  else
+    return
+  end
 
-  -- Q|title|complete|obj~fin|...
+  -- Q<sep>title<sep>complete<sep>obj~fin...
   local fields = {}
-  for part in string.gfind(msg, "[^|]+") do
+  local pat = "[^" .. sep .. "]+"
+  for part in string.gfind(msg, pat) do
     table.insert(fields, part)
   end
   if getn(fields) < 3 then return end

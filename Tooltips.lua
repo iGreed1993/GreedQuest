@@ -58,8 +58,16 @@ local function ItemMatchesObjective(itemName, objText)
 end
 
 local function LooksLikeItemObjective(objText, otype)
+  otype = otype or ""
+  if otype == "monster" or otype == "mob" or otype == "kill" or otype == "event" then
+    return false
+  end
   if otype == "item" or otype == "object" then return true end
   if not objText or objText == "" then return false end
+  local low = string.lower(objText)
+  if string.find(low, "slain", 1, true) or string.find(low, "killed", 1, true) then
+    return false
+  end
   if string.find(objText, "%d+/%d+") then return true end
   return false
 end
@@ -163,13 +171,19 @@ function Tooltips:FindRelatedQuests(name, isUnit)
         local otype = Lower(obj.type or "")
         local hit = false
 
-        if LooksLikeItemObjective(ot, otype) then
-          -- Item tooltip path: exact-ish item name match only
-          if not isUnit and ItemMatchesObjective(name, ot) then
+        if isUnit then
+          -- Kill / talk: unit name in the objective line (ignore 0/10 item heuristic)
+          local otl = Lower(ot)
+          local core = ObjectiveCoreName(ot)
+          if (otl ~= "" and string.find(otl, needle, 1, true))
+             or (core ~= "" and string.find(core, needle, 1, true)) then
+            hit = true
+          end
+        elseif LooksLikeItemObjective(ot, otype) then
+          if ItemMatchesObjective(name, ot) then
             hit = true
           end
         else
-          -- Kill / event: unit name appears in objective text
           local otl = Lower(ot)
           if otl ~= "" and string.find(otl, needle, 1, true) then
             hit = true
