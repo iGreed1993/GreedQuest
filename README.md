@@ -1,6 +1,6 @@
 # GreedQuest
 
-Quest helper for WoW 1.12 (TurtleWoW / OctoWoW).
+Quest helper for WoW 1.18.1 (TurtleWoW / OctoWoW).
 
 **This is an alpha and a work in progress.** Expect missing quests, pin bugs, and options that still move around. Do not treat it as a finished replacement for other helpers yet.
 
