@@ -4,7 +4,7 @@
 ]]
 
 GreedQuest = GreedQuest or CreateFrame("Frame", "GreedQuest")
-GreedQuest.version = "0.8.79-alpha"
+GreedQuest.version = "0.8.80-alpha"
 
 -- Soft-migrate map pin sizes for existing SavedVariables
 local function GQ_EnsurePinSizeDefaults()

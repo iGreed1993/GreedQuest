@@ -524,6 +524,11 @@ local function TypRank(typ)
   return 0
 end
 
+local function IsAvailablePin(n)
+  if not n then return false end
+  return n.typ == "Available" or n.typ == "Quest Giver" or n.source == "available"
+end
+
 function Map:StabilizeDisplayNodes(list)
   if not list or getn(list) == 0 then return list end
   table.sort(list, function(a, b)
@@ -545,14 +550,28 @@ function Map:StabilizeDisplayNodes(list)
   for i = 1, getn(list) do
     local n = list[i]
     local drop = false
+    local nudged = false
     for j = 1, getn(keep) do
       local k = keep[j]
       local dx = (n.x or 0) - (k.x or 0)
       local dy = (n.y or 0) - (k.y or 0)
       if dx * dx + dy * dy <= o2 then
-        -- Already kept a higher-or-equal priority pin here
-        drop = true
-        break
+        local nAvail = IsAvailablePin(n)
+        local kAvail = IsAvailablePin(k)
+        if nAvail and not kAvail then
+          -- Keep a "!" next to turn-ins / objectives so pickups stay visible.
+          -- Nudge so the "?" (higher frame level) does not eat the mouseover.
+          if not nudged then
+            n.x = (n.x or 0) + 1.2
+            n.y = (n.y or 0) - 0.4
+            nudged = true
+          end
+        elseif (not nAvail) and kAvail then
+          -- Non-available may sit on the same giver; leave both.
+        else
+          drop = true
+          break
+        end
       end
     end
     if not drop then
