@@ -4,7 +4,7 @@
 ]]
 
 GreedQuest = GreedQuest or CreateFrame("Frame", "GreedQuest")
-GreedQuest.version = "0.8.81-alpha"
+GreedQuest.version = "0.8.92-alpha"
 
 -- Soft-migrate map pin sizes for existing SavedVariables
 local function GQ_EnsurePinSizeDefaults()
@@ -14,6 +14,7 @@ local function GQ_EnsurePinSizeDefaults()
   if m.worldPinSize == nil then m.worldPinSize = 9 end
   if m.continentPinSize == nil then m.continentPinSize = 10 end
   if m.zonePinSize == nil then m.zonePinSize = 12 end
+  if m.colorCodedObjectives == nil then m.colorCodedObjectives = true end
 end
 
 local GQ = GreedQuest
@@ -41,6 +42,7 @@ GQ.defaults = {
     growUp = false,
     sortMode = "zone",      -- log | zone | incomplete | level | closest
     filterPreset = "all",   -- all | zone | incomplete | complete
+    showQuestCount = false,
   },
   map = {
     showObjectives = true,
@@ -68,6 +70,7 @@ GQ.defaults = {
     iconKill = "attack",
     iconLoot = "vendor",
     iconObject = "workbench",
+    colorCodedObjectives = true,
     dotAvailR = 1.0, dotAvailG = 0.85, dotAvailB = 0.1,
     dotTurnR = 1.0,  dotTurnG = 0.75,  dotTurnB = 0.1,
     dotKillR = 0.95, dotKillG = 0.25,  dotKillB = 0.2,
@@ -94,6 +97,9 @@ GQ.defaults = {
     hideRepeatable = false,
     autoAccept = false,
     autoTurnIn = false,
+    announceComplete = false,
+    announceProgress = false,
+    announceAcceptDrop = false,
   },
 }
 

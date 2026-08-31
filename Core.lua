@@ -592,6 +592,90 @@ function Core:QuestInCurrentZone(q)
   return false
 end
 
+function Core:PartyAnnounce(msg)
+  if not msg or msg == "" then return end
+  if not GetNumPartyMembers or (GetNumPartyMembers() or 0) <= 0 then return end
+  if not SendChatMessage then return end
+  msg = string.gsub(msg, "|", "/")
+  msg = string.gsub(msg, "%%", "/")
+  if string.len(msg) > 240 then
+    msg = string.sub(msg, 1, 240)
+  end
+  if pcall then
+    pcall(SendChatMessage, msg, "PARTY")
+  else
+    SendChatMessage(msg, "PARTY")
+  end
+end
+
+function Core:AnnounceLogDiff(oldKeys, newKeys)
+  local cfg = GreedQuestConfig and GreedQuestConfig.general
+  if not cfg then return end
+  if not GetNumPartyMembers or (GetNumPartyMembers() or 0) <= 0 then return end
+  -- First scan has no baseline; do not dump the whole log as "Accepted".
+  if not oldKeys then return end
+  newKeys = newKeys or {}
+
+  local function objSig(q)
+    if not q or not q.objectives then return "" end
+    local s = ""
+    local i
+    for i = 1, getn(q.objectives) do
+      local o = q.objectives[i]
+      s = s .. (o.text or "") .. (o.finished and "1" or "0") .. ";"
+    end
+    return s
+  end
+
+  if cfg.announceAcceptDrop or cfg.announceComplete then
+    local key, q
+    for key, q in pairs(newKeys) do
+      if not oldKeys[key] then
+        if cfg.announceAcceptDrop then
+          self:PartyAnnounce("Accepted: " .. (q.title or "Quest"))
+        end
+      end
+    end
+    for key, oldq in pairs(oldKeys) do
+      if not newKeys[key] then
+        if oldq and oldq.complete and cfg.announceComplete then
+          self:PartyAnnounce("Turned in: " .. (oldq.title or "Quest"))
+        elseif cfg.announceAcceptDrop then
+          self:PartyAnnounce("Abandoned: " .. ((oldq and oldq.title) or "Quest"))
+        end
+      end
+    end
+  end
+
+  if cfg.announceProgress or cfg.announceComplete then
+    local key, q
+    for key, q in pairs(newKeys) do
+      local oldq = oldKeys[key]
+      if oldq and q then
+        if cfg.announceComplete and q.complete and not oldq.complete then
+          self:PartyAnnounce("Completed: " .. (q.title or "Quest"))
+        end
+        if cfg.announceProgress and objSig(oldq) ~= objSig(q) then
+          -- Prefer the objective line that changed
+          local msg = nil
+          if q.objectives then
+            local i
+            for i = 1, getn(q.objectives) do
+              local o = q.objectives[i]
+              local oo = oldq.objectives and oldq.objectives[i]
+              if o and ((not oo) or (oo.text ~= o.text) or (oo.finished ~= o.finished)) then
+                msg = (q.title or "Quest") .. ": " .. (o.text or "")
+                break
+              end
+            end
+          end
+          if msg then self:PartyAnnounce(msg) end
+        end
+      end
+    end
+  end
+end
+
 function Core:ScanQuestLog()
   self.questLog = {}
   local numEntries = GetNumQuestLogEntries() or 0
@@ -693,6 +777,7 @@ function Core:ScanQuestLog()
   end
   -- Drop tracker-off entries for quests that left the log
   self:PruneTrackerOff(newKeys)
+  self:AnnounceLogDiff(self.prevLogKeys, newKeys)
   self.prevLogKeys = newKeys
 
   -- Detect whether quest set / complete flags changed (not just objective counts)

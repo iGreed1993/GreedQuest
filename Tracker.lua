@@ -21,6 +21,9 @@ end
 
 function Tracker:QuestMarkerBullet(q)
   local r, g, b = 0.67, 0.67, 0.67
+  if GreedQuestConfig and GreedQuestConfig.map and GreedQuestConfig.map.colorCodedObjectives == false then
+    return "|cffaaaaaa•|r "
+  end
   if q and GQ.Map and GQ.Map.GetQuestMarkerColor then
     -- Ensure colors are assigned (same palette / order as map pins)
     if GQ.Map.RefreshQuestMarkers then
@@ -168,7 +171,7 @@ function Tracker:Init()
         GameTooltip:SetOwner(this, "ANCHOR_LEFT")
         GameTooltip:ClearLines()
         GameTooltip:AddLine(this.zoneName or "Zone", 1, 0.85, 0.2)
-        GameTooltip:AddLine("Right-click: expand/collapse zone", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Left-click: expand/collapse zone", 0.7, 0.7, 0.7)
         GameTooltip:Show()
         return
       end
@@ -184,8 +187,8 @@ function Tracker:Init()
         GameTooltip:AddLine(Tracker:GetTurnInLine(this.quest), 0.3, 1.0, 0.3)
       end
       if this.lineType == "title" then
-        GameTooltip:AddLine("Left: show on map  |  Shift-hover: full text  |  Right: collapse", 0.7, 0.7, 0.7)
-        GameTooltip:AddLine("Alt-Left: hide quest", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Left: collapse  |  Right: show on map  |  Shift-hover: full text", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Shift-click: stop tracking", 0.7, 0.7, 0.7)
       end
       if GQ.Share and GQ.Share.AddProgressToTooltip then
         local dens = GreedQuestConfig and GreedQuestConfig.tooltips and GreedQuestConfig.tooltips.density
@@ -328,7 +331,7 @@ end
 
 function Tracker:OnLineClick(btn, mouseButton)
   if btn.lineType == "header" then
-    if mouseButton == "RightButton" and btn.zoneName then
+    if mouseButton == "LeftButton" and btn.zoneName then
       self:ToggleZoneCollapse(btn.zoneName)
     end
     return
@@ -336,18 +339,21 @@ function Tracker:OnLineClick(btn, mouseButton)
   local q = btn.quest
   if not q then return end
 
-  if mouseButton == "RightButton" then
-    if btn.lineType == "title" then self:ToggleCollapse(q) end
-    return
-  end
-  if IsAltKeyDown() then
-    if GQ.Map and GQ.Map.ToggleHideQuest then
-      GQ.Map:ToggleHideQuest(q.questID, q.title)
+  if IsShiftKeyDown() then
+    if GQ.Core and GQ.Core.ToggleTrackerForQuest then
+      GQ.Core:ToggleTrackerForQuest(q)
     end
     return
   end
-  if GQ.Map and GQ.Map.FocusQuest then
-    GQ.Map:FocusQuest(q.questID, q.title, q.complete and "Turn In" or "Objective")
+  if mouseButton == "RightButton" then
+    if GQ.Map and GQ.Map.FocusQuest then
+      GQ.Map:FocusQuest(q.questID, q.title, q.complete and "Turn In" or "Objective")
+    end
+    return
+  end
+  -- Left click: collapse / expand this quest's objectives
+  if btn.lineType == "title" or btn.lineType == "objective" then
+    self:ToggleCollapse(q)
   end
 end
 
@@ -557,8 +563,60 @@ function Tracker:Refresh()
 
   self:SortQuests(list, sortMode)
 
+  -- Keep chosen sort, but always park collapsed zones at the bottom.
+  local i
+  for i = 1, getn(list) do
+    list[i]._ord = i
+  end
+  table.sort(list, function(a, b)
+    local ac = self:IsZoneCollapsed(a._zoneName) and 1 or 0
+    local bc = self:IsZoneCollapsed(b._zoneName) and 1 or 0
+    if ac ~= bc then return ac < bc end
+    return (a._ord or 0) < (b._ord or 0)
+  end)
+
+  local zoneCounts = {}
+  for _, q in ipairs(list) do
+    local zn = q._zoneName or "Other"
+    zoneCounts[zn] = (zoneCounts[zn] or 0) + 1
+  end
+
+  -- First time a quest becomes complete, collapse its objectives.
+  if not self._didAutoCollapse then self._didAutoCollapse = {} end
+  if not GreedQuestCharDB.collapsed then GreedQuestCharDB.collapsed = {} end
+  for _, q in ipairs(list) do
+    local key = self:CollapseKey(q)
+    if q.complete then
+      if not self._didAutoCollapse[key] then
+        GreedQuestCharDB.collapsed[key] = 1
+        self._didAutoCollapse[key] = 1
+      end
+    else
+      self._didAutoCollapse[key] = nil
+    end
+  end
+
   local lineH = self:LineHeight()
   local y = -8
+  local logCount = 0
+  local _, lq
+  for _, lq in pairs(log) do
+    if lq and lq.title then logCount = logCount + 1 end
+  end
+  if cfg.showQuestCount then
+    if self.frame.header then
+      self.frame.header:ClearAllPoints()
+      self.frame.header:SetPoint("TOPLEFT", 8, y)
+      self.frame.header:SetText("|cffffd100Current quests:|r |cffffffff" .. tostring(logCount) .. "/25|r")
+      self.frame.header:Show()
+    end
+    y = y - lineH
+  else
+    if self.frame.header then
+      self.frame.header:SetText("")
+      self.frame.header:Hide()
+    end
+  end
   local lineIndex = 1
   local shown = 0
   local lastZone = nil
@@ -588,7 +646,12 @@ function Tracker:Refresh()
       if lineIndex <= MAX_LINES then
         local collapsed = self:IsZoneCollapsed(zname)
         local mark = collapsed and "|cffaaaaaa[+]|r " or "|cff808080[-]|r "
-        SetLine(lineIndex, mark .. "|cff808080—— " .. zname .. " ——|r", nil, "header", zname)
+        local count = zoneCounts[zname] or 0
+        local extra = ""
+        if collapsed and count > 0 then
+          extra = " |cffaaaaaa(" .. tostring(count) .. ")|r"
+        end
+        SetLine(lineIndex, mark .. "|cff808080—— " .. zname .. " ——" .. extra .. "|r", nil, "header", zname)
         lineIndex = lineIndex + 1
       end
     end
@@ -659,9 +722,7 @@ function Tracker:Refresh()
   if totalH < 40 then totalH = 40 end
   self.frame:SetHeight(totalH)
 
-  if shown == 0 then
-    if self.frame.header then self.frame.header:SetText("") self.frame.header:Hide() end
-  else
+  if not cfg.showQuestCount then
     if self.frame.header then self.frame.header:SetText("") self.frame.header:Hide() end
   end
 end

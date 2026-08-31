@@ -12,6 +12,7 @@ local Map = GQ.Map
 
 -- Performance: avoid full rebuilds on movement; coalesce pin draws
 Map._clustersDirty = true
+Map._miniNeedsFull = true
 Map._pinUpdateQueued = false
 Map._miniOnlyQueued = false
 
@@ -58,10 +59,11 @@ function Map:ApplyIconStyle()
 
   if style == "dots" then
     local dot = self.ICON_CHOICES.dot
-    self.ICON.available = dot
-    self.ICON.complete  = dot
-    self.ICON.giver     = dot
-    self.ICON.turnin    = dot
+    -- Keep ! / ? as quest icons; only objectives become colored dots.
+    self.ICON.available = "Interface\AddOns\GreedQuest\media\available"
+    self.ICON.giver     = self.ICON.available
+    self.ICON.complete  = "Interface\AddOns\GreedQuest\media\complete"
+    self.ICON.turnin    = self.ICON.complete
     self.ICON.kill      = dot
     self.ICON.loot      = dot
     self.ICON.talk      = dot
@@ -164,7 +166,6 @@ function Map:ResolvePinVisual(typ, grey, node)
   local r, g, b = 1, 1, 1
 
   if typ == "Available" or typ == "Quest Giver" then
-    -- Typed available markers: yellow / blue / red / green / gray
     local kind = nil
     if node then
       kind = self:GetAvailableKind(node.questID, node.title or node.quest)
@@ -179,48 +180,59 @@ function Map:ResolvePinVisual(typ, grey, node)
         kind = bestKind
       end
     end
-    local media = "Interface\\AddOns\\GreedQuest\\media\\"
-    if kind == "repeatable" then
-      tex = media .. "repeatable"
-    elseif kind == "pvp" then
-      tex = media .. "pvpquest"
-    elseif kind == "seasonal" then
-      tex = media .. "eventquest"
-    elseif kind == "lowlevel" then
-      tex = media .. "available_gray"
-    else
-      tex = media .. "available"
-    end
-    r, g, b = 1, 1, 1
-    if style == "dots" then
-      tex = (self.ICON_CHOICES and self.ICON_CHOICES.dot) or tex
+    local availChoice = cfg.iconAvailable or "quest"
+    -- Dots mode and the default "Quest !" choice use typed media icons.
+    if style == "dots" or availChoice == "quest" then
+      local media = "Interface\\AddOns\\GreedQuest\\media\\"
+      if kind == "repeatable" then
+        tex = media .. "repeatable"
+      elseif kind == "pvp" then
+        tex = media .. "pvpquest"
+      elseif kind == "seasonal" then
+        tex = media .. "eventquest"
+      elseif kind == "lowlevel" then
+        tex = media .. "available_gray"
+      else
+        tex = media .. "available"
+      end
+      r, g, b = 1, 1, 1
+    elseif availChoice == "dot" then
+      tex = (self.ICON_CHOICES and self.ICON_CHOICES.dot) or self.ICON.available
       if kind == "repeatable" then r, g, b = 0.15, 0.45, 1.00
       elseif kind == "pvp" then r, g, b = 1.0, 0.25, 0.25
       elseif kind == "seasonal" then r, g, b = 0.20, 0.95, 0.30
       elseif kind == "lowlevel" then r, g, b = 0.55, 0.55, 0.55
       else r, g, b = 1, 0.85, 0.1
       end
+    else
+      tex = self.ICON.available or self.ICON_CHOICES.gossip
+      r, g, b = 1, 1, 1
     end
   elseif typ == "Turn In" then
     local kind = node and self:GetAvailableKind(node.questID, node.title or node.quest)
-    local media = "Interface\\AddOns\\GreedQuest\\media\\"
-    if kind == "repeatable" then
-      tex = media .. "repeatable_complete"
-    elseif kind == "pvp" then
-      tex = media .. "pvpquest_complete"
-    elseif kind == "seasonal" then
-      tex = media .. "eventquest_complete"
-    else
-      tex = media .. "complete"
-    end
-    r, g, b = 1, 1, 1
-    if style == "dots" or (cfg.iconTurnin == "dot") then
-      tex = (self.ICON_CHOICES and self.ICON_CHOICES.dot) or tex
+    local turnChoice = cfg.iconTurnin or "quest"
+    if style == "dots" or turnChoice == "quest" then
+      local media = "Interface\\AddOns\\GreedQuest\\media\\"
+      if kind == "repeatable" then
+        tex = media .. "repeatable_complete"
+      elseif kind == "pvp" then
+        tex = media .. "pvpquest_complete"
+      elseif kind == "seasonal" then
+        tex = media .. "eventquest_complete"
+      else
+        tex = media .. "complete"
+      end
+      r, g, b = 1, 1, 1
+    elseif turnChoice == "dot" then
+      tex = (self.ICON_CHOICES and self.ICON_CHOICES.dot) or self.ICON.turnin
       if kind == "repeatable" then r, g, b = 0.15, 0.45, 1.00
       elseif kind == "pvp" then r, g, b = 1.0, 0.25, 0.25
       elseif kind == "seasonal" then r, g, b = 0.20, 0.95, 0.30
       else r, g, b = 1, 0.75, 0.1
       end
+    else
+      tex = self.ICON.turnin or self.ICON_CHOICES.questActive
+      r, g, b = 1, 1, 1
     end
   elseif typ == "Kill" then
     tex = self.ICON.kill
@@ -255,34 +267,41 @@ end
 
 -- Per-quest accent colors for the "•" marker on pins.
 Map.QUEST_MARKER_PALETTE = {
-  { 1.00, 0.20, 0.20 }, -- red
-  { 0.25, 0.55, 1.00 }, -- blue
-  { 0.15, 0.90, 0.30 }, -- green
-  { 1.00, 0.60, 0.05 }, -- orange
-  { 0.80, 0.30, 1.00 }, -- purple
-  { 0.05, 0.90, 0.95 }, -- cyan
-  { 1.00, 0.90, 0.10 }, -- yellow
-  { 1.00, 0.40, 0.75 }, -- pink
-  { 0.70, 0.45, 0.15 }, -- brown
-  { 0.40, 1.00, 0.60 }, -- mint
-  { 0.55, 0.55, 1.00 }, -- periwinkle
-  { 1.00, 0.65, 0.40 }, -- peach
-  { 0.90, 0.90, 0.90 }, -- light gray
-  { 0.20, 0.80, 0.70 }, -- teal
-  { 0.95, 0.30, 0.50 }, -- rose
-  { 0.60, 0.80, 0.20 }, -- lime
-  { 0.40, 0.40, 0.95 }, -- indigo
-  { 0.95, 0.75, 0.20 }, -- gold
-  { 0.70, 0.20, 0.40 }, -- wine
-  { 0.30, 0.70, 0.95 }, -- sky
-  { 0.85, 0.50, 0.20 }, -- copper
-  { 0.50, 0.95, 0.50 }, -- spring
-  { 0.95, 0.55, 0.80 }, -- blush
-  { 0.45, 0.65, 0.45 }, -- olive
-  { 0.75, 0.75, 0.30 }, -- chartreuse
+  { 1.00, 0.18, 0.18 }, -- red
+  { 0.15, 0.45, 1.00 }, -- blue
+  { 0.10, 0.85, 0.22 }, -- green
+  { 1.00, 0.55, 0.00 }, -- orange
+  { 0.72, 0.18, 1.00 }, -- violet
+  { 0.00, 0.88, 0.92 }, -- cyan
+  { 1.00, 0.92, 0.05 }, -- yellow
+  { 1.00, 0.22, 0.70 }, -- magenta
+  { 0.55, 0.28, 0.08 }, -- brown
+  { 0.85, 0.85, 0.85 }, -- white
+  { 0.20, 0.20, 0.85 }, -- indigo
+  { 0.55, 0.95, 0.20 }, -- lime
+  { 0.95, 0.35, 0.10 }, -- scarlet
+  { 0.10, 0.65, 0.45 }, -- sea
+  { 0.95, 0.70, 0.85 }, -- pink
+  { 0.35, 0.12, 0.55 }, -- deep purple
+  { 0.90, 0.80, 0.20 }, -- gold
+  { 0.15, 0.35, 0.15 }, -- forest
+  { 0.70, 0.10, 0.25 }, -- crimson
+  { 0.40, 0.75, 1.00 }, -- sky
+  { 0.80, 0.50, 0.10 }, -- amber
+  { 0.50, 0.50, 0.50 }, -- gray
+  { 0.00, 0.55, 0.55 }, -- teal
+  { 1.00, 0.45, 0.45 }, -- coral
+  { 0.45, 0.20, 0.90 }, -- orchid
 }
 
--- Assign a stable palette color to each quest in the log (by log index order).
+local function MarkerColorDist(a, b)
+  local dr = (a[1] or 0) - (b[1] or 0)
+  local dg = (a[2] or 0) - (b[2] or 0)
+  local db = (a[3] or 0) - (b[3] or 0)
+  return dr * dr + dg * dg + db * db
+end
+
+-- Assign colors so quests that share a zone get the most different dots.
 function Map:RefreshQuestMarkers()
   self._questMarkerColor = {}
   local log = GQ.Core and GQ.Core.questLog
@@ -301,12 +320,45 @@ function Map:RefreshQuestMarkers()
   end)
   local palette = self.QUEST_MARKER_PALETTE
   local pcount = getn(palette)
-  local n = 0
-  for _, q in ipairs(list) do
-    n = n + 1
-    if n > 25 then break end
-    local idx = math.mod(n - 1, pcount) + 1
-    self._questMarkerColor[tostring(q.questID)] = palette[idx]
+  if pcount < 1 then return end
+
+  local byZone = {}
+  local zi
+  for zi = 1, getn(list) do
+    local q = list[zi]
+    local z = "Other"
+    if GQ.Tracker and GQ.Tracker.GuessZoneName then
+      z = GQ.Tracker:GuessZoneName(q) or "Other"
+    end
+    if not byZone[z] then byZone[z] = {} end
+    table.insert(byZone[z], q)
+  end
+
+  local zname, qs
+  for zname, qs in pairs(byZone) do
+    local usedIdx = {}
+    local qi
+    for qi = 1, getn(qs) do
+      local q = qs[qi]
+      local bestI, bestScore = 1, -1
+      local pi
+      for pi = 1, pcount do
+        local col = palette[pi]
+        local minD = 100
+        local ui
+        for ui = 1, getn(usedIdx) do
+          local d = MarkerColorDist(col, palette[usedIdx[ui]])
+          if d < minD then minD = d end
+        end
+        if getn(usedIdx) == 0 then minD = 100 end
+        if minD > bestScore then
+          bestScore = minD
+          bestI = pi
+        end
+      end
+      table.insert(usedIdx, bestI)
+      self._questMarkerColor[tostring(q.questID)] = palette[bestI]
+    end
   end
 end
 
@@ -315,11 +367,45 @@ function Map:GetQuestMarkerColor(node)
   return self._questMarkerColor[tostring(node.questID)]
 end
 
+function Map:QuestObjectiveCount(qid)
+  if not qid or not GQ.Core or not GQ.Core.GetQuestByID then return 0 end
+  local q = GQ.Core:GetQuestByID(qid)
+  if q and q.objectives then return getn(q.objectives) end
+  return 0
+end
+
+function Map:IsSingleObjectiveQuest(node)
+  if not node or not node.questID then return false end
+  local typ = node.typ or ""
+  if typ ~= "Kill" and typ ~= "Loot" and typ ~= "Object" then return false end
+  return self:QuestObjectiveCount(node.questID) == 1
+end
+
+function Map:AdjustPinDrawSize(base, node)
+  local s = tonumber(base) or 12
+  if not node then return s end
+  if node.typ == "Turn In" then
+    s = s + 1
+  end
+  if self:IsSingleObjectiveQuest(node) then
+    s = s + 1
+  end
+  return s
+end
+
 -- Colored "•" over the pin; pure text color so the tint always reads.
 
 
 function Map:ApplyQuestMarker(pin, node, pinSize)
   if not pin or not pin.numText then return end
+  local on = true
+  if GreedQuestConfig and GreedQuestConfig.map and GreedQuestConfig.map.colorCodedObjectives == false then
+    on = false
+  end
+  if not on then
+    pin.numText:Hide()
+    return
+  end
   local c = self:GetQuestMarkerColor(node)
   if not c then
     pin.numText:Hide()
@@ -529,7 +615,7 @@ local function IsAvailablePin(n)
   return n.typ == "Available" or n.typ == "Quest Giver" or n.source == "available"
 end
 
-function Map:StabilizeDisplayNodes(list)
+function Map:StabilizeDisplayNodes(list, skipGiverCluster)
   if not list or getn(list) == 0 then return list end
   table.sort(list, function(a, b)
     local pa, pb = PinPriority(a), PinPriority(b)
@@ -558,16 +644,27 @@ function Map:StabilizeDisplayNodes(list)
       if dx * dx + dy * dy <= o2 then
         local nAvail = IsAvailablePin(n)
         local kAvail = IsAvailablePin(k)
+        local nt = n.typ or ""
+        local kt = k.typ or ""
+        local nObj = (nt == "Kill" or nt == "Loot" or nt == "Object")
+        local kObj = (kt == "Kill" or kt == "Loot" or kt == "Object")
         if nAvail and not kAvail then
-          -- Keep a "!" next to turn-ins / objectives so pickups stay visible.
-          -- Nudge so the "?" (higher frame level) does not eat the mouseover.
-          if not nudged then
+          if skipGiverCluster then
+            -- Zone / minimap: leave ! and ? on true coordinates.
+          elseif not nudged then
             n.x = (n.x or 0) + 1.2
             n.y = (n.y or 0) - 0.4
             nudged = true
           end
         elseif (not nAvail) and kAvail then
-          -- Non-available may sit on the same giver; leave both.
+          -- keep both
+        elseif nObj and kObj and tostring(n.questID or "") ~= tostring(k.questID or "") then
+          -- Never fold two different quests into one objective icon.
+          if not nudged then
+            n.x = (n.x or 0) + 0.9
+            n.y = (n.y or 0) - 0.5
+            nudged = true
+          end
         else
           drop = true
           break
@@ -581,7 +678,7 @@ function Map:StabilizeDisplayNodes(list)
   return keep
 end
 
-function Map:ClusterNodesForMap(mapID)
+function Map:ClusterNodesForMap(mapID, skipGiverCluster)
   local raw = self.nodes[mapID]
   if not raw or getn(raw) == 0 then return {} end
 
@@ -597,7 +694,7 @@ function Map:ClusterNodesForMap(mapID)
       c.isCluster = false
       table.insert(out, c)
     end
-    return self:StabilizeDisplayNodes(out)
+    return self:StabilizeDisplayNodes(out, skipGiverCluster)
   end
 
   local radius = self:GetClusterRadius()
@@ -608,6 +705,10 @@ function Map:ClusterNodesForMap(mapID)
   local buckets = {}
   for _, node in ipairs(raw) do
     local key = GroupKey(node)
+    local typ = tostring(node.typ or "")
+    if skipGiverCluster and (typ == "Available" or typ == "Turn In" or typ == "Quest Giver") then
+      key = typ .. "|exact|" .. tostring(node.questID or node.title or "") .. "|" .. tostring(node.x) .. "|" .. tostring(node.y) .. "|" .. tostring(node.entityId or "")
+    end
     if not buckets[key] then buckets[key] = {} end
     table.insert(buckets[key], node)
   end
@@ -724,13 +825,15 @@ function Map:ClusterNodesForMap(mapID)
     end
   end
 
-  return self:StabilizeDisplayNodes(result)
+  return self:StabilizeDisplayNodes(result, skipGiverCluster)
 end
 
 function Map:RebuildClusters()
   self.clusters = {}
+  self.clustersWide = nil
   for mapID, _ in pairs(self.nodes) do
-    self.clusters[mapID] = self:ClusterNodesForMap(mapID)
+    -- Always keep available / turn-in on true coords (zone, mini, continent).
+    self.clusters[mapID] = self:ClusterNodesForMap(mapID, true)
   end
   -- Cluster list changed — minimap must reassign pins (do not early-return)
   self._miniNeedsFull = true
@@ -1533,6 +1636,53 @@ function Map:ZoneToDisplayedMapCoords(zoneID, x, y)
 end
 
 
+
+-- Capitals / city maps painted onto the overworld zone they sit in.
+-- City-local 0-100 is scaled into a small box so districts stay distinct.
+Map.CITY_EMBEDS = {
+  -- x,y = center of the city footprint on the PARENT zone map (0-100).
+  -- box = how wide/tall that footprint is, so districts spread across it.
+  [1519] = { -- Stormwind: large NW block on Elwynn
+    { parent = 12,   x = 23, y = 29, box = 18 },
+    { parent = 5581, x = 18, y = 20, box = 16 },
+  },
+  [4411] = { -- Harbor sits on the west edge of that same block
+    { parent = 12,   x = 16, y = 26, box = 8 },
+    { parent = 5581, x = 12, y = 16, box = 8 },
+  },
+  [1537] = { { parent = 1,   x = 53, y = 27, box = 14 } }, -- Ironforge, north Dun Morogh
+  [1637] = { { parent = 14,  x = 46, y = 11, box = 14 } }, -- Orgrimmar, north Durotar
+  [1638] = { { parent = 215, x = 37, y = 27, box = 12 } }, -- Thunder Bluff mesa
+  -- Darnassus (1657) already has working Teldrassil coords — do not embed.
+  [1497] = { { parent = 85,  x = 62, y = 69, box = 10 } }, -- Undercity, south Tirisfal
+}
+
+function Map:EmbedCityPoint(embed, x, y)
+  local box = embed.box or 6
+  local cx = tonumber(x) or 50
+  local cy = tonumber(y) or 50
+  local px = embed.x + (cx - 50) / 100 * box
+  local py = embed.y + (cy - 50) / 100 * box
+  if px < 1 then px = 1 end
+  if px > 99 then px = 99 end
+  if py < 1 then py = 1 end
+  if py > 99 then py = 99 end
+  return px, py
+end
+
+function Map:ForCityEmbedsOnZone(parentZone, fn)
+  if not parentZone or not self.CITY_EMBEDS then return end
+  local cityID, embeds
+  for cityID, embeds in pairs(self.CITY_EMBEDS) do
+    local i
+    for i = 1, getn(embeds) do
+      if embeds[i].parent == parentZone then
+        fn(cityID, embeds[i])
+      end
+    end
+  end
+end
+
 function Map:GetDisplayedZoneID()
   -- Resolve the zone the world map is showing.
   -- Returns nil on continent view OR when the open zone is not in our DB
@@ -1653,15 +1803,22 @@ local MINI_ZOOM_INDOOR = {
   [5] = 50,
 }
 
+-- Indoor zoom detect. SetZoom is required when the two CVars match, but
+-- doing it on every pin blurs party-edge arrows — cache by zoom for 2s.
+local _indoorCache, _indoorZoom, _indoorAt = nil, nil, 0
 local function MinimapIsIndoor()
-  -- Classic minimap zoom CVar trick
+  local z = 0
+  if Minimap and Minimap.GetZoom then z = Minimap:GetZoom() or 0 end
+  local now = GetTime and GetTime() or 0
+  if _indoorCache ~= nil and _indoorZoom == z and (now - _indoorAt) < 2.0 then
+    return _indoorCache
+  end
   local inside = false
-  if GetCVar and SetCVar and Minimap and Minimap.GetZoom and Minimap.SetZoom then
-    local z = Minimap:GetZoom() or 0
+  if GetCVar and Minimap and Minimap.SetZoom then
     local curZoom = GetCVar("minimapZoom")
     local curInside = GetCVar("minimapInsideZoom")
     if curZoom and curInside and curZoom == curInside then
-      if (tonumber(curInside) or 0) >= 3 then
+      if z >= 3 then
         Minimap:SetZoom(0)
       else
         Minimap:SetZoom(3)
@@ -1669,68 +1826,73 @@ local function MinimapIsIndoor()
       inside = (tonumber(GetCVar("minimapInsideZoom")) or 0) == Minimap:GetZoom()
       Minimap:SetZoom(z)
     else
-      inside = curInside and curZoom and (tonumber(curInside) == z)
+      inside = curInside and (tonumber(curInside) == z)
     end
   end
-  return inside and 0 or 1
+  _indoorCache = inside and 0 or 1
+  _indoorZoom = z
+  _indoorAt = now
+  return _indoorCache
 end
 
-function Map:PositionMiniPin(pin, x, y)
-  -- Pins stay locked to terrain while you walk
+function Map:GetMiniLayout()
   local pxf, pyf = GetPlayerMapPositionSafe()
   if not pxf or not pyf or (pxf == 0 and pyf == 0) then
-    pin:Hide()
-    return false
+    return nil
   end
-
   local mapID = self.playerZoneID
   local sizes = GreedQuestDB and GreedQuestDB.minimapSizes
   local dims = mapID and sizes and sizes[mapID]
-  -- Custom Turtle zones often lack minimapSizes entries; use a sane default
-  -- so tracking/quest pins still appear (scale won't be perfect but usable).
   local mapWidth, mapHeight
   if dims and dims[1] and dims[1] ~= 0 and dims[2] and dims[2] ~= 0 then
     mapWidth, mapHeight = dims[1], dims[2]
   else
     mapWidth, mapHeight = 2000, 1330
   end
-
-  local xPlayer = pxf * 100
-  local yPlayer = pyf * 100
   local mZoom = 0
   if Minimap and Minimap.GetZoom then
     mZoom = Minimap:GetZoom() or 0
   end
-
   local indoor = MinimapIsIndoor()
   local zoomTbl = (indoor == 0) and MINI_ZOOM_INDOOR or MINI_ZOOM_OUTDOOR
   local mapZoom = zoomTbl[mZoom] or zoomTbl[0]
-
-  local xScale = mapZoom / mapWidth
-  local yScale = mapZoom / mapHeight
   local mw = Minimap:GetWidth() or 140
   local mh = Minimap:GetHeight() or 140
-  local xDraw = mw / xScale / 100
-  local yDraw = mh / yScale / 100
+  local xScale = mapZoom / mapWidth
+  local yScale = mapZoom / mapHeight
+  return {
+    xPlayer = pxf * 100,
+    yPlayer = pyf * 100,
+    xDraw = mw / xScale / 100,
+    yDraw = mh / yScale / 100,
+    maxR2 = ((mw / 2) * 0.9) * ((mw / 2) * 0.9),
+    pxf = pxf,
+    pyf = pyf,
+    zoom = mZoom,
+  }
+end
 
-  -- node x,y are 0-100 zone coords (same space as xPlayer/yPlayer)
-  local xPos = ((x or 0) - xPlayer) * xDraw
-  local yPos = ((y or 0) - yPlayer) * yDraw
-
-  local dist2 = xPos * xPos + yPos * yPos
-  local maxR = (mw / 2) * 0.9
-  if dist2 > (maxR * maxR) then
+function Map:PositionMiniPin(pin, x, y, layout)
+  layout = layout or self:GetMiniLayout()
+  if not layout then
     pin:Hide()
     return false
   end
-
+  local xPos = ((x or 0) - layout.xPlayer) * layout.xDraw
+  local yPos = ((y or 0) - layout.yPlayer) * layout.yDraw
+  if (xPos * xPos + yPos * yPos) > layout.maxR2 then
+    pin:Hide()
+    return false
+  end
+  if pin._gqMiniParent ~= Minimap then
+    pin:SetParent(Minimap)
+    pin._gqMiniParent = Minimap
+    pin:EnableMouse(true)
+    pin:SetFrameLevel((Minimap.GetFrameLevel and Minimap:GetFrameLevel() or 2) + 8)
+  end
   pin:ClearAllPoints()
-  pin:SetParent(Minimap)
-  pin:EnableMouse(true)
-  pin:SetFrameLevel((Minimap.GetFrameLevel and Minimap:GetFrameLevel() or 2) + 8)
-  -- SetPoint(..., xPos, -yPos)
   pin:SetPoint("CENTER", Minimap, "CENTER", xPos, -yPos)
-  pin:Show()
+  if not pin:IsShown() then pin:Show() end
   return true
 end
 
@@ -1878,10 +2040,7 @@ function Map:UpdateWorldPins()
   else
     baseSize = cfgMap.zonePinSize or 12
   end
-  -- Dots stay half of the chosen size for that view
-  if iconStyle == "dots" then
-    baseSize = math.max(3, math.floor(baseSize * 0.5))
-  end
+  -- Objective dots stay half size; available / turn-in keep icon size
 
   local function paint(node, px, py)
     if worldIndex > getn(self.worldPins) then
@@ -1897,6 +2056,8 @@ function Map:UpdateWorldPins()
       local boost = 40
       if node.typ == "Turn In" then
         boost = 58
+      elseif self:IsSingleObjectiveQuest(node) then
+        boost = 52
       elseif node.typ == "Available" or node.typ == "Quest Giver" then
         boost = 32
       end
@@ -1957,6 +2118,13 @@ function Map:UpdateWorldPins()
       self:ApplyPinTextureTint(pin.texture, r, g, b, node.typ, special)
     end
     local drawSize = baseSize
+    if iconStyle == "dots" then
+      local typ = node.typ or ""
+      if typ ~= "Available" and typ ~= "Quest Giver" and typ ~= "Turn In" then
+        drawSize = math.max(3, math.floor(baseSize * 0.5))
+      end
+    end
+    drawSize = self:AdjustPinDrawSize(drawSize, node)
     if pin.texture and pin.texture.GetTexture then
       local tp = pin.texture:GetTexture() or ""
       if string.find(string.lower(tostring(tp)), "media\\dot") or string.find(string.lower(tostring(tp)), "media/dot") then
@@ -2029,6 +2197,18 @@ function Map:UpdateWorldPins()
         paint(node, node.x, node.y)
       end
     end
+    -- Cities that sit inside this zone (Stormwind on Elwynn, etc.)
+    if self.ForCityEmbedsOnZone then
+      self:ForCityEmbedsOnZone(shownZone, function(cityID, embed)
+        local clist = self.clusters[cityID]
+        if not clist then return end
+        local _, node
+        for _, node in ipairs(clist) do
+          local px, py = self:EmbedCityPoint(embed, node.x, node.y)
+          paint(node, px, py)
+        end
+      end)
+    end
   end
 end
 
@@ -2051,36 +2231,28 @@ function Map:UpdateMinimapPins()
     return
   end
 
-  local pxf, pyf = GetPlayerMapPositionSafe()
-  local mZoom = (Minimap.GetZoom and Minimap:GetZoom()) or 0
-  -- Skip work if nothing moved AND we do not need a full rebuild
-  if not self._miniNeedsFull and self._lastMiniX and self._lastMiniY and self._lastMiniZoom == mZoom then
-    local dx = (pxf or 0) - self._lastMiniX
-    local dy = (pyf or 0) - self._lastMiniY
-    if (dx * dx + dy * dy) < 0.00000025 then
-      return
-    end
+  -- Full rebuild only when nodes / zone / style changed. Movement uses RepositionMiniPinsOnly.
+  if not self._miniNeedsFull then
+    self:RepositionMiniPinsOnly()
+    return
   end
-  self._lastMiniX = pxf
-  self._lastMiniY = pyf
-  self._lastMiniZoom = mZoom
   self._miniNeedsFull = false
 
-  -- Always clear every pin slot so stale nodes from a previous cluster mode cannot reappear
-  for _, pin in ipairs(self.miniPins) do
-    pin:Hide()
-    pin.node = nil
-  end
-
   local list = self.clusters[playerZoneID]
-  if not list then return end
+  if not list then
+    local hi
+    for hi = 1, getn(self.miniPins) do
+      local p = self.miniPins[hi]
+      if p then p.node = nil p:Hide() end
+    end
+    return
+  end
 
   local miniSize = (GreedQuestConfig.map.miniPinSize) or 10
-  if (GreedQuestConfig.map.iconStyle or "native") == "dots" then
-    miniSize = math.max(3, math.floor(miniSize * 0.5))
-  end
+  local miniDots = (GreedQuestConfig.map.iconStyle or "native") == "dots"
   local pinAlpha = (GreedQuestConfig.map.pinAlpha) or 1
 
+  local layout = self:GetMiniLayout()
   local miniIndex = 1
   for _, node in ipairs(list) do
     if miniIndex > getn(self.miniPins) then
@@ -2114,11 +2286,18 @@ function Map:UpdateMinimapPins()
       end
       -- Per-pin half size when this node is a circular dot under mixed native mode
       local size = miniSize
+      if miniDots then
+        local typ = node.typ or ""
+        if typ ~= "Available" and typ ~= "Quest Giver" and typ ~= "Turn In" then
+          size = math.max(3, math.floor(miniSize * 0.5))
+        end
+      end
+      size = self:AdjustPinDrawSize(size, node)
       if pin.texture and pin.texture.GetTexture then
         local tp = tostring(pin.texture:GetTexture() or "")
         if string.find(string.lower(tp), "media\\dot") or string.find(string.lower(tp), "media/dot") then
           if (GreedQuestConfig.map.iconStyle or "native") ~= "dots" then
-            size = math.max(3, math.floor(miniSize * 0.5))
+            size = math.max(3, math.floor(size * 0.5))
           end
         end
       end
@@ -2126,13 +2305,68 @@ function Map:UpdateMinimapPins()
       pin:SetHeight(size)
       pin:SetAlpha(pinAlpha)
       self:ApplyQuestMarker(pin, node, size)
-      if self:PositionMiniPin(pin, nx, ny) then
+      if self:PositionMiniPin(pin, nx, ny, layout) then
         miniIndex = miniIndex + 1
       else
-        -- Out of range: release the slot so RepositionMiniPinsOnly cannot revive it
         pin.node = nil
         pin:Hide()
       end
+    end
+  end
+  if self.ForCityEmbedsOnZone then
+    self:ForCityEmbedsOnZone(playerZoneID, function(cityID, embed)
+      local clist = self.clusters[cityID]
+      if not clist then return end
+      local _, node
+      for _, node in ipairs(clist) do
+        if miniIndex > getn(self.miniPins) then
+          self:EnsureMiniPool(miniIndex + 32)
+        end
+        local pin = self.miniPins[miniIndex]
+        if pin then
+          local px, py = self:EmbedCityPoint(embed, node.x, node.y)
+          local copy = {}
+          local k, v
+          for k, v in pairs(node) do copy[k] = v end
+          copy.x = px
+          copy.y = py
+          copy.mapID = playerZoneID
+          pin.node = copy
+          pin:EnableMouse(true)
+          if pin.texture then
+            local tex, r, g, b = self:ResolvePinVisual(node.typ, node.grey, node)
+            local primary = tex or node.texture
+            pin.texture:SetTexture(primary)
+            self:ApplyPinTextureTint(pin.texture, r, g, b, node.typ, false)
+          end
+          local size = miniSize
+          if miniDots then
+            local typ = node.typ or ""
+            if typ ~= "Available" and typ ~= "Quest Giver" and typ ~= "Turn In" then
+              size = math.max(3, math.floor(miniSize * 0.5))
+            end
+          end
+          size = self:AdjustPinDrawSize(size, node)
+          pin:SetWidth(size)
+          pin:SetHeight(size)
+          pin:SetAlpha(pinAlpha)
+          self:ApplyQuestMarker(pin, copy, size)
+          if self:PositionMiniPin(pin, px, py, layout) then
+            miniIndex = miniIndex + 1
+          else
+            pin.node = nil
+            pin:Hide()
+          end
+        end
+      end
+    end)
+  end
+  local rest
+  for rest = miniIndex, getn(self.miniPins) do
+    local p = self.miniPins[rest]
+    if p then
+      p.node = nil
+      p:Hide()
     end
   end
 end
@@ -2140,25 +2374,26 @@ end
 -- Lightweight: only shift existing visible minimap pins (movement)
 function Map:RepositionMiniPinsOnly()
   if not self.miniPins then return end
-  local pxf, pyf = GetPlayerMapPositionSafe()
-  local mZoom = (Minimap and Minimap.GetZoom and Minimap:GetZoom()) or 0
-  if self._lastMiniX and self._lastMiniZoom == mZoom then
-    local dx = (pxf or 0) - self._lastMiniX
-    local dy = (pyf or 0) - (self._lastMiniY or 0)
-    if (dx * dx + dy * dy) < 0.00000025 then
+  local layout = self:GetMiniLayout()
+  if not layout then return end
+  -- Skip tiny steps so pins do not twitch from GetPlayerMapPosition noise
+  if self._lastMiniX and self._lastMiniZoom == layout.zoom then
+    local dx = layout.pxf - self._lastMiniX
+    local dy = layout.pyf - (self._lastMiniY or 0)
+    if (dx * dx + dy * dy) < 0.00000004 then
       return
     end
   end
-  self._lastMiniX = pxf
-  self._lastMiniY = pyf
-  self._lastMiniZoom = mZoom
+  self._lastMiniX = layout.pxf
+  self._lastMiniY = layout.pyf
+  self._lastMiniZoom = layout.zoom
 
-  for _, pin in ipairs(self.miniPins) do
-    local n = pin.node
-    if n and n.mapID and self.playerZoneID and tonumber(n.mapID) == tonumber(self.playerZoneID) then
-      self:PositionMiniPin(pin, tonumber(n.x) or n.x, tonumber(n.y) or n.y)
-    else
-      if pin:IsShown() then pin:Hide() end
+  local i
+  for i = 1, getn(self.miniPins) do
+    local pin = self.miniPins[i]
+    local n = pin and pin.node
+    if n then
+      self:PositionMiniPin(pin, tonumber(n.x) or n.x, tonumber(n.y) or n.y, layout)
     end
   end
 end
@@ -2896,14 +3131,11 @@ function Map:Init()
       else
         Map:ClearHighlight()
         if WorldMapTooltip then WorldMapTooltip:Hide() end
-        -- After map closes, Blizzard may reset map coords; refresh minimap once
-        Map:ResolvePlayerZone()
-        Map._miniNeedsFull = true
-        Map:UpdateMinimapPins()
       end
     elseif event == "MINIMAP_UPDATE" then
-      Map._lastMiniZoom = nil  -- force rescale
-      Map:UpdateMinimapPins()
+      -- Zoom / rotate: move existing pins, do not rebuild textures
+      Map._lastMiniZoom = nil
+      Map:RepositionMiniPinsOnly()
     else
       Map:ResolvePlayerZone()
       Map._miniNeedsFull = true
@@ -2915,8 +3147,8 @@ function Map:Init()
   local ticker = CreateFrame("Frame")
   local elapsed = 0
   ticker:SetScript("OnUpdate", function()
-    elapsed = elapsed + (arg1 or 0.05)
-    if elapsed > 0.05 then
+    elapsed = elapsed + (arg1 or 0.03)
+    if elapsed > 0.03 then
       elapsed = 0
       if Map.playerZoneID and Map.miniPins then
         Map:RepositionMiniPinsOnly()

@@ -229,21 +229,119 @@ end
 Tooltips._lastName = nil
 Tooltips._lastTime = 0
 
+function Tooltips:UnitOffersAvailable(name)
+  local out = {}
+  if not name or name == "" then return out end
+  if not GQ.Core or not GQ.Core.GetAvailableQuests then return out end
+  local names = GreedQuestDB and GreedQuestDB.unitNames
+  if not names then return out end
+  local needle = Lower(name)
+  local available = GQ.Core:GetAvailableQuests() or {}
+  local ai
+  for ai = 1, getn(available) do
+    local aq = available[ai]
+    local qdata = aq.qdata
+    if (not qdata) and aq.questID and GQ.Database then
+      qdata = GQ.Database:GetQuest(aq.questID)
+    end
+    local startU = qdata and qdata["start"] and qdata["start"]["U"]
+    if startU then
+      local _, uid
+      for _, uid in pairs(startU) do
+        local un = names[uid]
+        if un and Lower(un) == needle then
+          table.insert(out, aq)
+          break
+        end
+      end
+    end
+  end
+  return out
+end
+
+function Tooltips:AppendAvailableGiver(name)
+  local list = self:UnitOffersAvailable(name)
+  if getn(list) == 0 then return false end
+  GameTooltip:AddLine(" ")
+  if getn(list) == 1 then
+    GameTooltip:AddLine("Available quest", 0.3, 1.0, 0.3)
+  else
+    GameTooltip:AddLine(string.format("%d available quests", getn(list)), 0.5, 0.85, 1)
+  end
+  local i
+  for i = 1, getn(list) do
+    local aq = list[i]
+    local title = aq.title or ("Quest " .. tostring(aq.questID or "?"))
+    local lvl = aq.level
+    local label = title
+    if lvl and GQ.Core and GQ.Core.FormatQuestLevel then
+      label = string.format("[%s] %s", GQ.Core:FormatQuestLevel(lvl, aq.questID, title, aq.tag), title)
+    elseif lvl then
+      label = string.format("[%s] %s", tostring(lvl), title)
+    end
+    local tr, tg, tb = 1, 0.85, 0.2
+    if GQ.Map and GQ.Map.GetAvailableTint then
+      local r, g, b = GQ.Map:GetAvailableTint(aq.questID, title)
+      if r then tr, tg, tb = r, g, b end
+    end
+    GameTooltip:AddLine(label, tr, tg, tb)
+    -- Objectives are added when Shift is held (see AppendShiftObjectives).
+  end
+  return true
+end
+
+function Tooltips:AppendShiftObjectives(name)
+  if GameTooltip.gqGQShiftObjs then return end
+  local list = self:UnitOffersAvailable(name)
+  if getn(list) == 0 then return end
+  local i
+  local any = false
+  for i = 1, getn(list) do
+    local aq = list[i]
+    local objText = aq.questID and GreedQuestDB and GreedQuestDB.questObjectives and GreedQuestDB.questObjectives[aq.questID]
+    if objText and objText ~= "" then
+      if not any then
+        GameTooltip:AddLine(" ")
+        any = true
+      end
+      GameTooltip:AddLine(objText, 0.92, 0.92, 0.92)
+    end
+  end
+  if any then
+    GameTooltip.gqGQShiftObjs = 1
+    GameTooltip:Show()
+  end
+end
+
 function Tooltips:AppendQuestProgress(name, isUnit)
   if not name or name == "" then return end
-  local dens = GreedQuestConfig and GreedQuestConfig.tooltips and GreedQuestConfig.tooltips.density
-  if dens == "off" then return end
+  if not GameTooltip:IsVisible() then return end
+  -- One pass per tooltip show so we do not fight vendor-price addons or duplicate lines.
+  local stamp = tostring(isUnit and 1 or 0) .. ":" .. name
+  if GameTooltip.gqGQStamp == stamp then return end
 
-  local now = GetTime and GetTime() or 0
-  if self._lastName == name and (now - self._lastTime) < 0.15 then
+  local dens = GreedQuestConfig and GreedQuestConfig.tooltips and GreedQuestConfig.tooltips.density
+  if dens == "off" then
+    GameTooltip.gqGQStamp = stamp
     return
   end
 
   local related = self:FindRelatedQuests(name, isUnit and true or false)
-  if getn(related) == 0 then return end
+  local addedAvail = false
+  if isUnit then
+    addedAvail = self:AppendAvailableGiver(name)
+  end
+  if getn(related) == 0 then
+    if addedAvail then
+      GameTooltip.gqGQStamp = stamp
+      GameTooltip:Show()
+    end
+    return
+  end
+  GameTooltip.gqGQStamp = stamp
 
   self._lastName = name
-  self._lastTime = now
+  self._lastTime = GetTime and GetTime() or 0
 
   for _, entry in ipairs(related) do
     local q = entry.quest
@@ -296,31 +394,78 @@ local function GetTooltipItemName()
   return nil
 end
 
+function Tooltips:QueueUnitOrItem(isUnit)
+  if GameTooltip.gqPinTooltip then return end
+  if not self._defer then
+    self._defer = CreateFrame("Frame")
+  end
+  self._pendUnit = isUnit and true or false
+  self._pendT = 0
+  self._defer:SetScript("OnUpdate", function()
+    Tooltips._pendT = (Tooltips._pendT or 0) + (arg1 or 0.01)
+    -- Wait a tick so other tooltip addons (vendor prices) finish writing.
+    if Tooltips._pendT < 0.03 then return end
+    if not GameTooltip:IsVisible() then
+      this:SetScript("OnUpdate", nil)
+      return
+    end
+    if GameTooltip.gqPinTooltip then
+      this:SetScript("OnUpdate", nil)
+      return
+    end
+    if Tooltips._pendUnit then
+      if UnitExists("mouseover") then
+        local name = UnitName("mouseover")
+        if name then
+          local shift = IsShiftKeyDown() and 1 or 0
+          if Tooltips._lastShift ~= shift then
+            Tooltips._lastShift = shift
+            if shift == 0 and GameTooltip.gqGQShiftObjs then
+              -- Rebuild the unit tooltip without objective text
+              GameTooltip.gqGQStamp = nil
+              GameTooltip.gqGQShiftObjs = nil
+              if GameTooltip.SetUnit then
+                GameTooltip:SetUnit("mouseover")
+              end
+            end
+          end
+          Tooltips:AppendQuestProgress(name, true)
+          if shift == 1 then
+            Tooltips:AppendShiftObjectives(name)
+          end
+        end
+      else
+        Tooltips._lastShift = nil
+        this:SetScript("OnUpdate", nil)
+      end
+    else
+      local name = GetTooltipItemName()
+      if name and name ~= "" then
+        Tooltips:AppendQuestProgress(name, false)
+      end
+      this:SetScript("OnUpdate", nil)
+    end
+  end)
+end
+
 function Tooltips:Init()
   local oldShow = GameTooltip:GetScript("OnShow")
   local oldHide = GameTooltip:GetScript("OnHide")
   GameTooltip:SetScript("OnHide", function()
     GameTooltip.gqPinTooltip = nil
+    GameTooltip.gqGQStamp = nil
+    GameTooltip.gqGQShiftObjs = nil
+    Tooltips._lastShift = nil
     if oldHide then oldHide() end
   end)
 
   GameTooltip:SetScript("OnShow", function()
     if oldShow then oldShow() end
     if GameTooltip.gqPinTooltip then return end
-
     if UnitExists("mouseover") then
-      local name = UnitName("mouseover")
-      if name then
-        Tooltips:AppendQuestProgress(name, true)
-      end
-      return
-    end
-
-    local name = GetTooltipItemName()
-    if name and name ~= "" then
-      if not UnitExists("mouseover") then
-        Tooltips:AppendQuestProgress(name, false)
-      end
+      Tooltips:QueueUnitOrItem(true)
+    else
+      Tooltips:QueueUnitOrItem(false)
     end
   end)
 
@@ -329,10 +474,7 @@ function Tooltips:Init()
     local original = obj[method]
     obj[method] = function(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
       original(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
-      local name = GetTooltipItemName()
-      if name then
-        Tooltips:AppendQuestProgress(name, false)
-      end
+      Tooltips:QueueUnitOrItem(false)
     end
   end
 

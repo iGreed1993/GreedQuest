@@ -205,6 +205,12 @@ local function BuildGeneral(child)
   y = MakeCheckbox(child, "Auto-turn-in quests", y, "general", "autoTurnIn")
   y = Hint(child, "Auto-turn-in skips reward choice dialogs when a choice is required.", y)
   y = y - 6
+  y = Header(child, "Party announces", y)
+  y = Hint(child, "Only sent to party chat, and only when you are in a party.", y)
+  y = MakeCheckbox(child, "Announce quest completion", y, "general", "announceComplete")
+  y = MakeCheckbox(child, "Announce quest progress", y, "general", "announceProgress")
+  y = MakeCheckbox(child, "Announce accepted / abandoned quests", y, "general", "announceAcceptDrop")
+  y = y - 6
   y = Header(child, "Advanced", y)
   y = MakeCheckbox(child, "Debug messages", y, "general", "debug")
   return math.abs(y) + 40
@@ -229,6 +235,8 @@ local function BuildTracker(child)
   y = Header(child, "Display", y)
   y = MakeCheckbox(child, "Show quest levels", y, "tracker", "showLevel", RefreshTracker)
   y = MakeCheckbox(child, "Show completed (ready to turn in)", y, "tracker", "showComplete", RefreshTracker)
+  y = MakeCheckbox(child, "Show number of current quests", y, "tracker", "showQuestCount", RefreshTracker)
+  y = Hint(child, 'Adds Current quests: #/25 at the top of the tracker.', y)
   y = y - 4
   y = Header(child, "Sort mode (click to cycle)", y)
   y = MakeCycle(child, "Sort by", y, "tracker", "sortMode", {
@@ -244,7 +252,7 @@ local function BuildTracker(child)
     {"Incomplete", "incomplete"},
     {"Complete only", "complete"},
   }, RefreshTracker)
-  y = Hint(child, "Shift-hover: full text · Right-click: collapse · Alt-click: hide/unhide · Shift-click in quest log: track/untrack.", y)
+  y = Hint(child, "Shift-hover: full text · Left-click: collapse · Right-click: show on map · Shift-click: untrack · Left-click zone header: collapse zone.", y)
   return math.abs(y) + 40
 end
 
@@ -284,7 +292,9 @@ local function BuildIcons(child)
     {"Native icons", "native"},
     {"Colored dots", "dots"},
   }, RefreshAll)
-  y = Hint(child, "Colored dots use simple circles: yellow available, gold turn-in, red kill, green loot, cyan object.", y)
+  y = Hint(child, "Dots mode keeps ! and ? icons. Kill / loot / object pins become colored dots.", y)
+  y = MakeCheckbox(child, "Color coded quest objectives", y, "map", "colorCodedObjectives", RefreshAll)
+  y = Hint(child, "Colored dots on map icons and tracker lines. Off = no color overlay.", y)
   y = y - 6
   y = Header(child, "Native icon set (when not using dots)", y)
   y = MakeCycle(child, "Available (!)", y, "map", "iconAvailable", {
@@ -313,7 +323,7 @@ local function BuildIcons(child)
     {"Gossip", "gossip"},
   }, RefreshAll)
   y = y - 4
-  y = Hint(child, "Colored dots use a circular marker with fixed colors per objective type.", y)
+  y = Hint(child, "Dots mode keeps ! and ? icons. Objectives use colored dots.", y)
   return math.abs(y) + 40
 end
 
@@ -328,7 +338,7 @@ local function BuildFilters(child)
   y = MakeCheckbox(child, "Hide repeatable / daily / cloth turn-ins", y, "general", "hideRepeatable", RefreshAll)
   y = y - 6
   y = Header(child, "Manual hides", y)
-  y = Hint(child, "Alt-click a pin or tracker quest to hide/unhide. Shift-click in the quest log also restores a hidden quest when tracking it.", y)
+  y = Hint(child, "Alt-click a map pin to hide/unhide. Shift-click a tracker quest or quest-log entry to untrack.", y)
   y = y - 4
   local clearBtn = CreateFrame("Button", nil, child, "UIPanelButtonTemplate")
   clearBtn:SetWidth(180)
