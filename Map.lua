@@ -267,38 +267,35 @@ end
 
 -- Per-quest accent colors for the "•" marker on pins.
 Map.QUEST_MARKER_PALETTE = {
-  { 1.00, 0.18, 0.18 }, -- red
-  { 0.15, 0.45, 1.00 }, -- blue
-  { 0.10, 0.85, 0.22 }, -- green
-  { 1.00, 0.55, 0.00 }, -- orange
-  { 0.72, 0.18, 1.00 }, -- violet
-  { 0.00, 0.88, 0.92 }, -- cyan
-  { 1.00, 0.92, 0.05 }, -- yellow
-  { 1.00, 0.22, 0.70 }, -- magenta
-  { 0.55, 0.28, 0.08 }, -- brown
-  { 0.85, 0.85, 0.85 }, -- white
-  { 0.20, 0.20, 0.85 }, -- indigo
-  { 0.55, 0.95, 0.20 }, -- lime
-  { 0.95, 0.35, 0.10 }, -- scarlet
-  { 0.10, 0.65, 0.45 }, -- sea
-  { 0.95, 0.70, 0.85 }, -- pink
-  { 0.35, 0.12, 0.55 }, -- deep purple
-  { 0.90, 0.80, 0.20 }, -- gold
-  { 0.15, 0.35, 0.15 }, -- forest
-  { 0.70, 0.10, 0.25 }, -- crimson
+  { 1.00, 0.12, 0.12 }, -- red
+  { 0.12, 0.32, 1.00 }, -- blue
+  { 1.00, 0.90, 0.05 }, -- yellow
+  { 0.78, 0.12, 1.00 }, -- violet
+  { 1.00, 0.48, 0.00 }, -- orange
+  { 0.95, 0.95, 0.95 }, -- white
+  { 1.00, 0.10, 0.62 }, -- magenta
+  { 0.50, 0.26, 0.08 }, -- brown
+  { 0.12, 0.48, 0.14 }, -- forest (dark green, not cyan)
+  { 0.35, 0.10, 0.55 }, -- deep purple
+  { 0.90, 0.72, 0.12 }, -- gold
+  { 0.70, 0.08, 0.22 }, -- wine
   { 0.40, 0.75, 1.00 }, -- sky
-  { 0.80, 0.50, 0.10 }, -- amber
-  { 0.50, 0.50, 0.50 }, -- gray
-  { 0.00, 0.55, 0.55 }, -- teal
-  { 1.00, 0.45, 0.45 }, -- coral
-  { 0.45, 0.20, 0.90 }, -- orchid
+  { 1.00, 0.42, 0.42 }, -- coral
+  { 0.20, 0.20, 0.55 }, -- navy
+  { 0.62, 1.00, 0.18 }, -- lime
+  { 0.55, 0.55, 0.55 }, -- gray
+  { 0.85, 0.45, 0.10 }, -- amber
+  { 0.45, 0.18, 0.90 }, -- orchid
+  { 0.15, 0.35, 0.15 }, -- pine
 }
 
+
 local function MarkerColorDist(a, b)
+  -- Weight R/B more than G so green vs cyan-ish colors stay far apart.
   local dr = (a[1] or 0) - (b[1] or 0)
   local dg = (a[2] or 0) - (b[2] or 0)
   local db = (a[3] or 0) - (b[3] or 0)
-  return dr * dr + dg * dg + db * db
+  return dr * dr * 1.4 + dg * dg * 0.35 + db * db * 1.5
 end
 
 -- Assign colors so quests that share a zone get the most different dots.
@@ -360,11 +357,41 @@ function Map:RefreshQuestMarkers()
       self._questMarkerColor[tostring(q.questID)] = palette[bestI]
     end
   end
+  -- Player overrides (ctrl-click) win
+  if GreedQuestCharDB and GreedQuestCharDB.questColorIdx then
+    local qid, idx
+    for qid, idx in pairs(GreedQuestCharDB.questColorIdx) do
+      idx = tonumber(idx)
+      if idx and palette[idx] then
+        self._questMarkerColor[tostring(qid)] = palette[idx]
+      end
+    end
+  end
 end
 
 function Map:GetQuestMarkerColor(node)
   if not node or not node.questID or not self._questMarkerColor then return nil end
   return self._questMarkerColor[tostring(node.questID)]
+end
+
+function Map:CycleQuestColor(qid, title)
+  qid = qid or title
+  if not qid then return end
+  if not GreedQuestCharDB then GreedQuestCharDB = {} end
+  if not GreedQuestCharDB.questColorIdx then GreedQuestCharDB.questColorIdx = {} end
+  local key = tostring(qid)
+  local palette = self.QUEST_MARKER_PALETTE
+  local pcount = getn(palette)
+  if pcount < 1 then return end
+  local cur = tonumber(GreedQuestCharDB.questColorIdx[key]) or 0
+  local nxt = math.mod(cur, pcount) + 1
+  GreedQuestCharDB.questColorIdx[key] = nxt
+  if not self._questMarkerColor then self._questMarkerColor = {} end
+  self._questMarkerColor[key] = palette[nxt]
+  if GQ.Tracker and GQ.Tracker.Refresh then GQ.Tracker:Refresh() end
+  self._miniNeedsFull = true
+  if self.UpdateWorldPins then self:UpdateWorldPins() end
+  if self.UpdateMinimapPins then self:UpdateMinimapPins() end
 end
 
 function Map:QuestObjectiveCount(qid)
@@ -648,9 +675,27 @@ function Map:StabilizeDisplayNodes(list, skipGiverCluster)
         local kt = k.typ or ""
         local nObj = (nt == "Kill" or nt == "Loot" or nt == "Object")
         local kObj = (kt == "Kill" or kt == "Loot" or kt == "Object")
-        if nAvail and not kAvail then
+        local nTurn = (nt == "Turn In")
+        local kTurn = (kt == "Turn In")
+        local sameGiver = false
+        if n.entityId and k.entityId and tostring(n.entityId) == tostring(k.entityId) then
+          sameGiver = true
+        elseif n.entityName and k.entityName and n.entityName ~= "" and n.entityName == k.entityName then
+          sameGiver = true
+        elseif n.turninID and k.entityId and tostring(n.turninID) == tostring(k.entityId) then
+          sameGiver = true
+        elseif k.turninID and n.entityId and tostring(k.turninID) == tostring(n.entityId) then
+          sameGiver = true
+        end
+        -- Same NPC: always keep "?" and drop "!"
+        if nAvail and kTurn then
+          drop = true
+          break
+        elseif nTurn and kAvail then
+          -- keep the turn-in we are adding
+        elseif nAvail and not kAvail then
           if skipGiverCluster then
-            -- Zone / minimap: leave ! and ? on true coordinates.
+            -- leave ! next to objectives on true coords
           elseif not nudged then
             n.x = (n.x or 0) + 1.2
             n.y = (n.y or 0) - 0.4
@@ -1216,6 +1261,19 @@ function Map:ShowPinTooltip(pin)
   if tip.SetFrameLevel then tip:SetFrameLevel(125) end
 end
 
+
+function Map:OnPinClick(pin)
+  local n = pin and pin.node
+  if not n then return end
+  if IsControlKeyDown() then
+    self:CycleQuestColor(n.questID, n.title or n.quest)
+    return
+  end
+  if IsAltKeyDown() then
+    self:ToggleHideQuest(n.questID, n.title or n.quest)
+  end
+end
+
 local function CreateWorldPin(parent, index)
   local pin = CreateFrame("Button", "GQWorldPin"..index, parent)
   pin:SetWidth(16)
@@ -1272,11 +1330,7 @@ local function CreateWorldPin(parent, index)
   end)
   pin:SetScript("OnLeave", function() GameTooltip:Hide() if WorldMapTooltip then WorldMapTooltip:Hide() end end)
   pin:SetScript("OnClick", function()
-    local n = this.node
-    if not n then return end
-    if IsAltKeyDown() then
-      Map:ToggleHideQuest(n.questID, n.title or n.quest)
-    end
+    Map:OnPinClick(this)
   end)
   pin:Hide()
   return pin
@@ -1304,6 +1358,10 @@ local function CreateMiniPin(parent, index)
   pin.numText = numText
 
   pin:EnableMouse(true)
+  pin:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  pin:SetScript("OnClick", function()
+    Map:OnPinClick(this)
+  end)
   pin:SetScript("OnEnter", function()
     this._gqHover = 1
     this._gqShift = IsShiftKeyDown() and 1 or 0
@@ -2011,6 +2069,7 @@ function Map:UpdateWorldPins()
 
   local mapOpen = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
   if not mapOpen then return end
+  if self.HideBlizzardQuestPOIs then self:HideBlizzardQuestPOIs() end
   if not GreedQuestConfig or not GreedQuestConfig.map then return end
 
   if self.UpdatePathLines then
@@ -2085,10 +2144,7 @@ function Map:UpdateWorldPins()
       if WorldMapTooltip then WorldMapTooltip:Hide() end
     end)
     pin:SetScript("OnClick", function()
-      local nn = this.node
-      if nn and IsAltKeyDown() then
-        Map:ToggleHideQuest(nn.questID, nn.title or nn.quest)
-      end
+      Map:OnPinClick(this)
     end)
     if pin.texture then
       local tex, r, g, b = self:ResolvePinVisual(node.typ, node.grey, node)
@@ -3106,8 +3162,61 @@ end
 -- Init
 -- ============================================================
 
+
+function Map:HideBlizzardQuestPOIs()
+  local function mute(f)
+    if not f or not f.Hide then return end
+    f:Hide()
+    if not f._gqHidden then
+      f._gqHidden = true
+      f.Show = function() end
+    end
+  end
+  mute(getglobal("WorldMapBlobFrame"))
+  mute(getglobal("QuestPOIFrame"))
+  mute(getglobal("QuestMapFrame"))
+  mute(getglobal("MiniMapQuestFrame"))
+  mute(getglobal("WatchFrameLines"))
+  local i
+  for i = 1, 40 do
+    mute(getglobal("QuestPOI_" .. i))
+    mute(getglobal("WorldMapQuestPOI" .. i))
+    mute(getglobal("WorldMapBlob"..i))
+  end
+  local function hideQuestTex(frame)
+    if not frame then return end
+    if frame.GetTexture and frame.GetTexture() then
+      local tex = string.lower(tostring(frame:GetTexture() or ""))
+      if string.find(tex, "questpoi", 1, true)
+         or string.find(tex, "questblob", 1, true)
+         or string.find(tex, "ui-questpoi", 1, true)
+         or string.find(tex, "questobjective", 1, true) then
+        mute(frame)
+      end
+    end
+    if frame.GetChildren then
+      local kids = { frame:GetChildren() }
+      local k
+      for k = 1, getn(kids) do
+        hideQuestTex(kids[k])
+      end
+    end
+    if frame.GetRegions then
+      local regs = { frame:GetRegions() }
+      local r
+      for r = 1, getn(regs) do
+        hideQuestTex(regs[r])
+      end
+    end
+  end
+  hideQuestTex(WorldMapButton)
+  hideQuestTex(WorldMapDetailFrame)
+  hideQuestTex(Minimap)
+end
+
 function Map:Init()
   self:ApplyIconStyle()
+  if self.HideBlizzardQuestPOIs then self:HideBlizzardQuestPOIs() end
   self:EnsureWorldPool()
   self:EnsureMiniPool()
 

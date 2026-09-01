@@ -188,7 +188,7 @@ function Tracker:Init()
       end
       if this.lineType == "title" then
         GameTooltip:AddLine("Left: collapse  |  Right: show on map  |  Shift-hover: full text", 0.7, 0.7, 0.7)
-        GameTooltip:AddLine("Shift-click: stop tracking", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Shift-click: stop tracking  |  Ctrl-click: cycle color", 0.7, 0.7, 0.7)
       end
       if GQ.Share and GQ.Share.AddProgressToTooltip then
         local dens = GreedQuestConfig and GreedQuestConfig.tooltips and GreedQuestConfig.tooltips.density
@@ -342,6 +342,12 @@ function Tracker:OnLineClick(btn, mouseButton)
   if IsShiftKeyDown() then
     if GQ.Core and GQ.Core.ToggleTrackerForQuest then
       GQ.Core:ToggleTrackerForQuest(q)
+    end
+    return
+  end
+  if IsControlKeyDown() then
+    if GQ.Map and GQ.Map.CycleQuestColor then
+      GQ.Map:CycleQuestColor(q.questID, q.title)
     end
     return
   end

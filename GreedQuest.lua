@@ -4,7 +4,7 @@
 ]]
 
 GreedQuest = GreedQuest or CreateFrame("Frame", "GreedQuest")
-GreedQuest.version = "0.8.92-alpha"
+GreedQuest.version = "0.8.94-alpha"
 
 -- Soft-migrate map pin sizes for existing SavedVariables
 local function GQ_EnsurePinSizeDefaults()
@@ -110,6 +110,7 @@ GQ.charDefaults = {
   hiddenQuests = {},      -- Alt-click hide from map + tracker
   trackerOff = {},        -- shift-click removed (autoTrack on)
   trackerOn = {},         -- shift-click added (autoTrack off)
+  questColorIdx = {},     -- ctrl-click pin/tracker color override
 }
 
 local function deepcopy(src)

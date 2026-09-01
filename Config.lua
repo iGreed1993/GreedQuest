@@ -252,7 +252,7 @@ local function BuildTracker(child)
     {"Incomplete", "incomplete"},
     {"Complete only", "complete"},
   }, RefreshTracker)
-  y = Hint(child, "Shift-hover: full text · Left-click: collapse · Right-click: show on map · Shift-click: untrack · Left-click zone header: collapse zone.", y)
+  y = Hint(child, "Shift-hover: full text · Left-click: collapse · Right-click: show on map · Shift-click: untrack · Ctrl-click: cycle color · Left-click zone header: collapse zone.", y)
   return math.abs(y) + 40
 end
 

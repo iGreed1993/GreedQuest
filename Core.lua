@@ -731,6 +731,23 @@ function Core:ScanQuestLog()
         description, objectiveText = GetQuestLogQuestText()
       end
 
+      -- Talk / event quests often have no leaderboard row. Keep the objective text.
+      if getn(objectives) == 0 and objectiveText and objectiveText ~= "" then
+        local line = objectiveText
+        local _, _, first = string.find(objectiveText, "^([^\n]+)")
+        if first and first ~= "" then line = first end
+        line = string.gsub(line, "^%s+", "")
+        line = string.gsub(line, "%s+$", "")
+        if line ~= "" then
+          table.insert(objectives, {
+            text = line,
+            type = "event",
+            finished = (isComplete == 1 or isComplete == true),
+            index = 1,
+          })
+        end
+      end
+
       local entry = {
         index         = i,
         title         = title,

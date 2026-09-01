@@ -229,6 +229,37 @@ end
 Tooltips._lastName = nil
 Tooltips._lastTime = 0
 
+function Tooltips:UnitOffersTurnIn(name)
+  local out = {}
+  if not name or name == "" then return out end
+  local names = GreedQuestDB and GreedQuestDB.unitNames
+  local log = GQ.Core and GQ.Core.questLog
+  if not names or not log or not GQ.Database then return out end
+  local needle = Lower(name)
+  local _, q
+  for _, q in pairs(log) do
+    if q and q.questID then
+      local qdata = GQ.Database:GetQuest(q.questID)
+      local endU = qdata and qdata["end"] and qdata["end"]["U"]
+      if endU then
+        local matched = false
+        local __, uid
+        for __, uid in pairs(endU) do
+          local un = names[uid]
+          if un and Lower(un) == needle then
+            matched = true
+            break
+          end
+        end
+        if matched then
+          table.insert(out, q)
+        end
+      end
+    end
+  end
+  return out
+end
+
 function Tooltips:UnitOffersAvailable(name)
   local out = {}
   if not name or name == "" then return out end
@@ -259,33 +290,67 @@ function Tooltips:UnitOffersAvailable(name)
   return out
 end
 
-function Tooltips:AppendAvailableGiver(name)
-  local list = self:UnitOffersAvailable(name)
-  if getn(list) == 0 then return false end
-  GameTooltip:AddLine(" ")
-  if getn(list) == 1 then
-    GameTooltip:AddLine("Available quest", 0.3, 1.0, 0.3)
-  else
-    GameTooltip:AddLine(string.format("%d available quests", getn(list)), 0.5, 0.85, 1)
+local function FormatGiverQuestLabel(q)
+  local title = q.title or ("Quest " .. tostring(q.questID or "?"))
+  local lvl = q.level
+  local label = title
+  if lvl and GQ.Core and GQ.Core.FormatQuestLevel then
+    label = string.format("[%s] %s", GQ.Core:FormatQuestLevel(lvl, q.questID, title, q.tag), title)
+  elseif lvl then
+    label = string.format("[%s] %s", tostring(lvl), title)
   end
+  if q.complete then
+    label = label .. " (completed)"
+  end
+  return label, title
+end
+
+function Tooltips:AppendAvailableGiver(name)
+  local avail = self:UnitOffersAvailable(name)
+  local turn = self:UnitOffersTurnIn(name)
+  if getn(avail) == 0 and getn(turn) == 0 then return false end
   local i
-  for i = 1, getn(list) do
-    local aq = list[i]
-    local title = aq.title or ("Quest " .. tostring(aq.questID or "?"))
-    local lvl = aq.level
-    local label = title
-    if lvl and GQ.Core and GQ.Core.FormatQuestLevel then
-      label = string.format("[%s] %s", GQ.Core:FormatQuestLevel(lvl, aq.questID, title, aq.tag), title)
-    elseif lvl then
-      label = string.format("[%s] %s", tostring(lvl), title)
+  if getn(turn) > 0 then
+    GameTooltip:AddLine(" ")
+    if getn(turn) == 1 then
+      GameTooltip:AddLine("Quest turn in", 1.0, 0.82, 0.2)
+    else
+      GameTooltip:AddLine(string.format("%d quest turn ins", getn(turn)), 1.0, 0.82, 0.2)
     end
-    local tr, tg, tb = 1, 0.85, 0.2
-    if GQ.Map and GQ.Map.GetAvailableTint then
-      local r, g, b = GQ.Map:GetAvailableTint(aq.questID, title)
-      if r then tr, tg, tb = r, g, b end
+    for i = 1, getn(turn) do
+      local q = turn[i]
+      local label = FormatGiverQuestLabel(q)
+      if q.complete then
+        GameTooltip:AddLine(label, 0.35, 1.0, 0.35)
+      else
+        GameTooltip:AddLine(label, 1.0, 0.85, 0.2)
+      end
     end
-    GameTooltip:AddLine(label, tr, tg, tb)
-    -- Objectives are added when Shift is held (see AppendShiftObjectives).
+  end
+  if getn(avail) > 0 then
+    GameTooltip:AddLine(" ")
+    if getn(avail) == 1 then
+      GameTooltip:AddLine("Available quest", 0.3, 1.0, 0.3)
+    else
+      GameTooltip:AddLine(string.format("%d available quests", getn(avail)), 0.5, 0.85, 1)
+    end
+    for i = 1, getn(avail) do
+      local aq = avail[i]
+      local title = aq.title or ("Quest " .. tostring(aq.questID or "?"))
+      local lvl = aq.level
+      local label = title
+      if lvl and GQ.Core and GQ.Core.FormatQuestLevel then
+        label = string.format("[%s] %s", GQ.Core:FormatQuestLevel(lvl, aq.questID, title, aq.tag), title)
+      elseif lvl then
+        label = string.format("[%s] %s", tostring(lvl), title)
+      end
+      local tr, tg, tb = 1, 0.85, 0.2
+      if GQ.Map and GQ.Map.GetAvailableTint then
+        local r, g, b = GQ.Map:GetAvailableTint(aq.questID, title)
+        if r then tr, tg, tb = r, g, b end
+      end
+      GameTooltip:AddLine(label, tr, tg, tb)
+    end
   end
   return true
 end
@@ -293,12 +358,12 @@ end
 function Tooltips:AppendShiftObjectives(name)
   if GameTooltip.gqGQShiftObjs then return end
   local list = self:UnitOffersAvailable(name)
-  if getn(list) == 0 then return end
+  local turn = self:UnitOffersTurnIn(name)
+  if getn(list) == 0 and getn(turn) == 0 then return end
   local i
   local any = false
-  for i = 1, getn(list) do
-    local aq = list[i]
-    local objText = aq.questID and GreedQuestDB and GreedQuestDB.questObjectives and GreedQuestDB.questObjectives[aq.questID]
+  local function addObj(qid)
+    local objText = qid and GreedQuestDB and GreedQuestDB.questObjectives and GreedQuestDB.questObjectives[qid]
     if objText and objText ~= "" then
       if not any then
         GameTooltip:AddLine(" ")
@@ -306,6 +371,12 @@ function Tooltips:AppendShiftObjectives(name)
       end
       GameTooltip:AddLine(objText, 0.92, 0.92, 0.92)
     end
+  end
+  for i = 1, getn(turn) do
+    addObj(turn[i].questID)
+  end
+  for i = 1, getn(list) do
+    addObj(list[i].questID)
   end
   if any then
     GameTooltip.gqGQShiftObjs = 1
