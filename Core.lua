@@ -638,8 +638,10 @@ function Core:AnnounceLogDiff(oldKeys, newKeys)
     end
     for key, oldq in pairs(oldKeys) do
       if not newKeys[key] then
-        if oldq and oldq.complete and cfg.announceComplete then
-          self:PartyAnnounce("Turned in: " .. (oldq.title or "Quest"))
+        if oldq and oldq.complete then
+          if cfg.announceComplete or cfg.announceAcceptDrop then
+            self:PartyAnnounce("Turned in: " .. (oldq.title or "Quest"))
+          end
         elseif cfg.announceAcceptDrop then
           self:PartyAnnounce("Abandoned: " .. ((oldq and oldq.title) or "Quest"))
         end
@@ -787,6 +789,13 @@ function Core:ScanQuestLog()
           if not GreedQuestCharDB.completed[key] then
             GreedQuestCharDB.completed[key] = (time and time()) or 1
           end
+          if oldq.questID then
+            GreedQuestCharDB.completed["id:" .. tostring(oldq.questID)] = GreedQuestCharDB.completed[key]
+          end
+          if oldq.title then
+            GreedQuestCharDB.completed["t:" .. string.lower(oldq.title)] = GreedQuestCharDB.completed[key]
+          end
+          self._needAvailableRefresh = true
         end
         self:InvalidateAvailableCache()
       end
@@ -823,13 +832,14 @@ function Core:ScanQuestLog()
   self._lastQuestSetKey = setKey
   self._lastStructKey = progKey
 
-  if structureChanged then
-    -- Accept / abandon / turn-in ready: rescan available givers
+  if structureChanged or self._needAvailableRefresh then
+    self._needAvailableRefresh = nil
     self:InvalidateAvailableCache()
     self:StartEligibleScan()
     if GQ.Map and GQ.Map.BuildNodesFromQuestLog then
       GQ.Map:BuildNodesFromQuestLog()
     end
+    self:ScheduleAvailableRefresh()
   end
 
   if GQ.Tracker and GQ.Tracker.Refresh then GQ.Tracker:Refresh() end
@@ -1014,16 +1024,29 @@ function Core:FilterConfigKey()
     tostring(g.hideLowLevel and 1 or 0))
 end
 
+function Core:CompletedFingerprint()
+  local c = GreedQuestCharDB and GreedQuestCharDB.completed
+  if not c then return "0" end
+  local n = 0
+  local k
+  for k, _ in pairs(c) do
+    n = n + 1
+  end
+  return tostring(n)
+end
+
 function Core:EligibleCacheKey()
   local lvl = UnitLevel("player") or 1
-  return string.format("%d:%d:%d:%s",
-    lvl, self:GetPlayerRaceMask(), self:GetPlayerClassMask(), self:FilterConfigKey())
+  return string.format("%d:%d:%d:%s:%s",
+    lvl, self:GetPlayerRaceMask(), self:GetPlayerClassMask(),
+    self:FilterConfigKey(), self:CompletedFingerprint())
 end
 
 function Core:InvalidateAvailableCache()
   self.eligibleCache = nil
   self.eligibleCacheKey = nil
-  self.availableCache = nil
+  -- Keep availableCache until the new scan finishes so ! pins do not vanish
+  -- for a second after a turn-in.
   if self.scanState then
     self.scanState.cancelled = true
     self.scanState = nil
@@ -1229,6 +1252,24 @@ function Core:ScheduleZoneRefresh()
   end)
 end
 
+
+function Core:ScheduleAvailableRefresh()
+  if not self._availRefresh then
+    self._availRefresh = CreateFrame("Frame")
+  end
+  local f = self._availRefresh
+  f.t = 0
+  f:SetScript("OnUpdate", function()
+    f.t = f.t + (arg1 or 0.05)
+    if f.t < 0.45 then return end
+    f:SetScript("OnUpdate", nil)
+    Core:InvalidateAvailableCache()
+    Core:StartEligibleScan()
+    if GQ.Map and GQ.Map.BuildNodesFromQuestLog then
+      GQ.Map:BuildNodesFromQuestLog()
+    end
+  end)
+end
 
 function Core:HideBlizzardTracker()
   -- Hide Blizzard objective tracker only. Tracking state is owned by GreedQuest

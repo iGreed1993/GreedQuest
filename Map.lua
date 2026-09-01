@@ -367,6 +367,45 @@ function Map:RefreshQuestMarkers()
       end
     end
   end
+  self:MergeSharedObjectiveColors()
+end
+
+function Map:MergeSharedObjectiveColors()
+  if not self._questMarkerColor or not self.nodes then return end
+  local byEnt = {}
+  local mapID, list, _, n
+  for mapID, list in pairs(self.nodes) do
+    if list then
+      for _, n in ipairs(list) do
+        local typ = n.typ or ""
+        if (typ == "Kill" or typ == "Loot") and n.questID then
+          local ent = tostring(n.entityId or n.entityName or "")
+          if ent ~= "" then
+            if not byEnt[ent] then byEnt[ent] = {} end
+            local qk = tostring(n.questID)
+            local seen = false
+            local j
+            for j = 1, getn(byEnt[ent]) do
+              if byEnt[ent][j] == qk then seen = true break end
+            end
+            if not seen then table.insert(byEnt[ent], qk) end
+          end
+        end
+      end
+    end
+  end
+  local ent, qids
+  for ent, qids in pairs(byEnt) do
+    if getn(qids) > 1 then
+      local primary = self._questMarkerColor[qids[1]]
+      local i
+      for i = 2, getn(qids) do
+        if primary then
+          self._questMarkerColor[qids[i]] = primary
+        end
+      end
+    end
+  end
 end
 
 function Map:GetQuestMarkerColor(node)
@@ -605,6 +644,11 @@ local function GroupKey(node)
     local ry = math.floor(((tonumber(node.y) or 0) * 2) + 0.5) / 2
     return typ .. "|" .. tostring(ent) .. "|" .. tostring(rx) .. "|" .. tostring(ry) .. "|" .. tostring(node.mapID or "")
   end
+  -- Kill + loot on the same mob share one pin across quests (Candles + Gold Dust).
+  if typ == "Kill" or typ == "Loot" then
+    local ent = node.entityId or node.entityName or ""
+    return "mob|" .. tostring(ent) .. "|" .. tostring(node.mapID or "")
+  end
   local ent = node.entityId or node.entityName or ""
   return tostring(node.questID or node.title or "") .. "|" .. typ .. "|" .. tostring(ent)
 end
@@ -687,11 +731,11 @@ function Map:StabilizeDisplayNodes(list, skipGiverCluster)
         elseif k.turninID and n.entityId and tostring(k.turninID) == tostring(n.entityId) then
           sameGiver = true
         end
-        -- Same NPC: always keep "?" and drop "!"
-        if nAvail and kTurn then
+        -- Same NPC: keep "?" and drop "!". Different NPCs on the same spot stay both.
+        if nAvail and kTurn and sameGiver then
           drop = true
           break
-        elseif nTurn and kAvail then
+        elseif nTurn and kAvail and sameGiver then
           -- keep the turn-in we are adding
         elseif nAvail and not kAvail then
           if skipGiverCluster then
@@ -703,12 +747,33 @@ function Map:StabilizeDisplayNodes(list, skipGiverCluster)
           end
         elseif (not nAvail) and kAvail then
           -- keep both
-        elseif nObj and kObj and tostring(n.questID or "") ~= tostring(k.questID or "") then
-          -- Never fold two different quests into one objective icon.
-          if not nudged then
-            n.x = (n.x or 0) + 0.9
-            n.y = (n.y or 0) - 0.5
-            nudged = true
+        elseif nObj and kObj then
+          local sameMob = false
+          if n.entityId and k.entityId and tostring(n.entityId) == tostring(k.entityId) then
+            sameMob = true
+          elseif n.entityName and k.entityName and n.entityName ~= "" and n.entityName == k.entityName then
+            sameMob = true
+          end
+          if sameMob then
+            -- Same enemy: keep kill over loot, one pin.
+            if kTurn or (kt == "Kill" and nt == "Loot") then
+              drop = true
+              break
+            elseif nt == "Kill" and kt == "Loot" then
+              -- keep incoming kill
+            else
+              drop = true
+              break
+            end
+          elseif tostring(n.questID or "") ~= tostring(k.questID or "") then
+            if not nudged then
+              n.x = (n.x or 0) + 0.9
+              n.y = (n.y or 0) - 0.5
+              nudged = true
+            end
+          else
+            drop = true
+            break
           end
         else
           drop = true
@@ -839,6 +904,13 @@ function Map:ClusterNodesForMap(mapID, skipGiverCluster)
       table.insert(centers, { cx, cy })
 
       local rep = members[1]
+      local mi
+      for mi = 1, getn(members) do
+        if members[mi].typ == "Kill" then
+          rep = members[mi]
+          break
+        end
+      end
       table.insert(result, {
         mapID   = mapID,
         x       = cx,
@@ -890,6 +962,32 @@ end
 -- Pin pools
 -- ============================================================
 
+
+
+function Map:CollectObjectiveQuests(node)
+  local out = {}
+  local seen = {}
+  local function add(n)
+    if not n then return end
+    local qid = n.questID
+    local title = n.title or n.quest
+    local key = qid and ("id:" .. tostring(qid)) or ("t:" .. tostring(title or ""))
+    if key == "id:" or key == "t:" then return end
+    if seen[key] then return end
+    seen[key] = true
+    local q = nil
+    if qid and GQ.Core and GQ.Core.GetQuestByID then
+      q = GQ.Core:GetQuestByID(qid)
+    end
+    table.insert(out, { questID = qid, title = title, quest = q, node = n })
+  end
+  if node.members then
+    local _, m
+    for _, m in ipairs(node.members) do add(m) end
+  end
+  add(node)
+  return out
+end
 
 function Map:CollectNearbyAvailable(node)
   local out = {}
@@ -957,6 +1055,12 @@ function Map:ShowPinTooltip(pin)
     else
       tip:AddLine("Available quest", 1, 0.82, 0)
     end
+  elseif (n.typ == "Kill" or n.typ == "Loot") and n.members and getn(n.members) > 1 then
+    local name = n.entityName
+    if (not name or name == "") and n.entityId and GreedQuestDB and GreedQuestDB.unitNames then
+      name = GreedQuestDB.unitNames[n.entityId]
+    end
+    tip:AddLine(name or "Quest objectives", 1, 0.82, 0)
   elseif title and title ~= "" then
     tip:AddLine(title, 1, 0.82, 0)
   else
@@ -1041,8 +1145,35 @@ function Map:ShowPinTooltip(pin)
     tip:AddLine(string.format("%d nearby locations", n.count), 0.5, 0.8, 1)
   end
 
+  local objQuests = nil
+  if n.typ == "Kill" or n.typ == "Loot" or n.typ == "Object" then
+    objQuests = self:CollectObjectiveQuests(n)
+  end
+  if objQuests and getn(objQuests) > 1 then
+    local qi
+    for qi = 1, getn(objQuests) do
+      local e = objQuests[qi]
+      tip:AddLine(e.title or "Quest", 1, 0.82, 0)
+      local q = e.quest
+      if q and q.objectives then
+        local _, obj
+        for _, obj in ipairs(q.objectives) do
+          local t = obj.text or ""
+          if t ~= "" then
+            if obj.finished then
+              tip:AddLine("  |cff55ff55" .. t .. "|r")
+            else
+              tip:AddLine("  |cffffffff" .. t .. "|r")
+            end
+          end
+        end
+      end
+    end
+  end
+
   -- Single progress block (deduped by objective text)
   local q = nil
+  if not (objQuests and getn(objQuests) > 1) then
   if n.questID and GQ.Core and GQ.Core.GetQuestByID then
     q = GQ.Core:GetQuestByID(n.questID)
   end
@@ -1149,6 +1280,7 @@ function Map:ShowPinTooltip(pin)
     end
   end
 
+  end -- single-quest progress
   -- Available: compact list; Shift shows title once with objective under it (no duplicate names)
   if (n.typ == "Available" or n.source == "available") then
     local nearby = self:CollectNearbyAvailable(n)

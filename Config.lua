@@ -209,7 +209,7 @@ local function BuildGeneral(child)
   y = Hint(child, "Only sent to party chat, and only when you are in a party.", y)
   y = MakeCheckbox(child, "Announce quest completion", y, "general", "announceComplete")
   y = MakeCheckbox(child, "Announce quest progress", y, "general", "announceProgress")
-  y = MakeCheckbox(child, "Announce accepted / abandoned quests", y, "general", "announceAcceptDrop")
+  y = MakeCheckbox(child, "Announce accepted / abandoned / turned in quests", y, "general", "announceAcceptDrop")
   y = y - 6
   y = Header(child, "Advanced", y)
   y = MakeCheckbox(child, "Debug messages", y, "general", "debug")
