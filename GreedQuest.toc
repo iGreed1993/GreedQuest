@@ -2,7 +2,7 @@
 ## Title: GreedQuest(Alpha) by |cffffd700iGreed|r
 ## Notes: Turtle/OctoWoW quest helper - map pins, tracker, search.
 ## Author: iGreed
-## Version: 0.8.84
+## Version: 0.8.85
 ## SavedVariables: GreedQuestConfig
 ## SavedVariablesPerCharacter: GreedQuestCharDB
 ## OptionalDeps: 

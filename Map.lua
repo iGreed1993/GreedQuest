@@ -1275,7 +1275,7 @@ function Map:OnPinClick(pin)
 end
 
 local function CreateWorldPin(parent, index)
-  local pin = CreateFrame("Button", "GQWorldPin"..index, parent)
+  local pin = CreateFrame("Frame", "GQWorldPin"..index, parent)
   pin:SetWidth(16)
   pin:SetHeight(16)
   if pin.SetFrameStrata then pin:SetFrameStrata("HIGH") end
@@ -1324,12 +1324,11 @@ local function CreateWorldPin(parent, index)
   pin.badgeText = badgeText
 
   pin:EnableMouse(true)
-  pin:RegisterForClicks("LeftButtonUp", "RightButtonUp")
   pin:SetScript("OnEnter", function()
     Map:ShowPinTooltip(this)
   end)
   pin:SetScript("OnLeave", function() GameTooltip:Hide() if WorldMapTooltip then WorldMapTooltip:Hide() end end)
-  pin:SetScript("OnClick", function()
+  pin:SetScript("OnMouseUp", function()
     Map:OnPinClick(this)
   end)
   pin:Hide()
@@ -1337,7 +1336,7 @@ local function CreateWorldPin(parent, index)
 end
 
 local function CreateMiniPin(parent, index)
-  local pin = CreateFrame("Button", "GQMiniPin"..index, parent)
+  local pin = CreateFrame("Frame", "GQMiniPin"..index, parent)
   pin:SetWidth(12)
   pin:SetHeight(12)
   pin:SetFrameLevel((parent.GetFrameLevel and parent:GetFrameLevel() or 5) + 8)
@@ -1358,8 +1357,7 @@ local function CreateMiniPin(parent, index)
   pin.numText = numText
 
   pin:EnableMouse(true)
-  pin:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-  pin:SetScript("OnClick", function()
+  pin:SetScript("OnMouseUp", function()
     Map:OnPinClick(this)
   end)
   pin:SetScript("OnEnter", function()
@@ -2143,7 +2141,7 @@ function Map:UpdateWorldPins()
       GameTooltip:Hide()
       if WorldMapTooltip then WorldMapTooltip:Hide() end
     end)
-    pin:SetScript("OnClick", function()
+    pin:SetScript("OnMouseUp", function()
       Map:OnPinClick(this)
     end)
     if pin.texture then
