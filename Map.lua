@@ -3184,28 +3184,35 @@ function Map:HideBlizzardQuestPOIs()
     mute(getglobal("WorldMapBlob"..i))
   end
   local function hideQuestTex(frame)
-    if not frame then return end
-    if frame.GetTexture and frame.GetTexture() then
-      local tex = string.lower(tostring(frame:GetTexture() or ""))
-      if string.find(tex, "questpoi", 1, true)
-         or string.find(tex, "questblob", 1, true)
-         or string.find(tex, "ui-questpoi", 1, true)
-         or string.find(tex, "questobjective", 1, true) then
-        mute(frame)
+    if not frame or type(frame) ~= "table" then return end
+    if frame.GetTexture then
+      local ok, tex = pcall(function() return frame:GetTexture() end)
+      if ok and tex and tex ~= "" then
+        tex = string.lower(tostring(tex))
+        if string.find(tex, "questpoi", 1, true)
+           or string.find(tex, "questblob", 1, true)
+           or string.find(tex, "ui-questpoi", 1, true)
+           or string.find(tex, "questobjective", 1, true) then
+          mute(frame)
+        end
       end
     end
     if frame.GetChildren then
-      local kids = { frame:GetChildren() }
-      local k
-      for k = 1, getn(kids) do
-        hideQuestTex(kids[k])
+      local ok, kids = pcall(function() return { frame:GetChildren() } end)
+      if ok and kids then
+        local k
+        for k = 1, getn(kids) do
+          hideQuestTex(kids[k])
+        end
       end
     end
     if frame.GetRegions then
-      local regs = { frame:GetRegions() }
-      local r
-      for r = 1, getn(regs) do
-        hideQuestTex(regs[r])
+      local ok, regs = pcall(function() return { frame:GetRegions() } end)
+      if ok and regs then
+        local r
+        for r = 1, getn(regs) do
+          hideQuestTex(regs[r])
+        end
       end
     end
   end

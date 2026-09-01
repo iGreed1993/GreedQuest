@@ -4,7 +4,6 @@
 ]]
 
 GreedQuest = GreedQuest or CreateFrame("Frame", "GreedQuest")
-GreedQuest.version = "0.8.94-alpha"
 
 -- Soft-migrate map pin sizes for existing SavedVariables
 local function GQ_EnsurePinSizeDefaults()
@@ -191,16 +190,16 @@ GQ:SetScript("OnEvent", function()
       local u, o, i, q = GQ.Database:Load()
       if (u or 0) > 0 then
         DEFAULT_CHAT_FRAME:AddMessage(string.format(
-          "|cff33ffccGreedQuest|r v%s | Units:%d Objects:%d Items:%d Quests:%d",
-          GQ.version, u, o, i, q))
+          "|cff33ffccGreedQuest|r | Units:%d Objects:%d Items:%d Quests:%d",
+          u, o, i, q))
       else
         local n = (GQ.Database.questIdList and getn(GQ.Database.questIdList)) or 0
         DEFAULT_CHAT_FRAME:AddMessage(string.format(
-          "|cff33ffccGreedQuest|r v%s loaded | %d startable quests indexed",
-          GQ.version, n))
+          "|cff33ffccGreedQuest|r loaded | %d startable quests indexed",
+          n))
       end
     else
-      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccGreedQuest|r v" .. GQ.version .. " loaded.")
+      DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccGreedQuest|r loaded.")
     end
 
     if GQ.Map and GQ.Map.Init then GQ.Map:Init() end
