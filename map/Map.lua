@@ -209,6 +209,9 @@ function Map:ResolvePinVisual(typ, grey, node)
       r, g, b = 1, 1, 1
     end
   elseif typ == "Turn In" then
+    if node and node.talkTo and node.grey then
+      return self.ICON.event or "Interface\GossipFrame\HealerGossipIcon", 1, 1, 1
+    end
     local kind = node and self:GetAvailableKind(node.questID, node.title or node.quest)
     local turnChoice = cfg.iconTurnin or "quest"
     if style == "dots" or turnChoice == "quest" then
@@ -2814,6 +2817,7 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
           itemID = extra.itemID,
           itemName = extra.itemName,
           dropChance = extra.dropChance,
+          talkTo = extra.talkTo,
         })
       end
     end
@@ -2821,9 +2825,39 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
 
   -- In-progress: do NOT show available "!" at giver. Show "?" at turn-in.
   -- Grey "?" while incomplete; normal yellow "?" when complete (ready to turn in).
+  local function IsTalkQuest()
+    if isComplete then return false end
+    if logQuest and logQuest.objectives then
+      local oi, anyKillLoot = 1, false
+      local anyTalk = false
+      for oi = 1, getn(logQuest.objectives) do
+        local o = logQuest.objectives[oi]
+        if o then
+          local ot = string.lower(o.type or "")
+          local tx = string.lower(o.text or "")
+          if ot == "monster" or ot == "mob" or ot == "item" or ot == "object" then
+            anyKillLoot = true
+          end
+          if ot == "event" or string.find(tx, "talk to", 1, true) or string.find(tx, "speak with", 1, true) then
+            anyTalk = true
+          end
+        end
+      end
+      if anyTalk and not anyKillLoot then return true end
+      if getn(logQuest.objectives) == 0 then return true end
+    end
+    if qdata and qdata["obj"] then
+      if qdata["obj"]["U"] or qdata["obj"]["I"] or qdata["obj"]["O"] then
+        return false
+      end
+    end
+    return true
+  end
+
   if cfg.showTurnins and qdata["end"] then
     local tex = self.ICON.turnin or self.ICON.complete
     local grey = not isComplete
+    local talkTo = IsTalkQuest()
     if qdata["end"]["U"] then
       local placed = false
       local _, uid
@@ -2832,20 +2866,20 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
         if u and GQ.Core and GQ.Core.UnitFactionOk and not GQ.Core:UnitFactionOk(u) then
           -- skip opposite-faction turn-in NPC
         else
-          placeEntity(uid, true, tex, self.LAYER.turnin, "Turn In", grey)
+          placeEntity(uid, true, tex, self.LAYER.turnin, "Turn In", grey, { talkTo = talkTo })
           placed = true
         end
       end
       -- If every end NPC was opposite faction, fall back to all (neutral data gaps)
       if not placed then
         for _, uid in pairs(qdata["end"]["U"]) do
-          placeEntity(uid, true, tex, self.LAYER.turnin, "Turn In", grey)
+          placeEntity(uid, true, tex, self.LAYER.turnin, "Turn In", grey, { talkTo = talkTo })
         end
       end
     end
     if qdata["end"]["O"] then
       for _, oid in pairs(qdata["end"]["O"]) do
-        placeEntity(oid, false, tex, self.LAYER.turnin, "Turn In", grey)
+        placeEntity(oid, false, tex, self.LAYER.turnin, "Turn In", grey, { talkTo = talkTo })
       end
     end
   end

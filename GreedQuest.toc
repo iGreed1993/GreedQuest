@@ -1,16 +1,15 @@
 ## Interface: 11200
-## Title: GreedQuest(Alpha) by |cffffd700iGreed|r
+## Title: GreedQuest(Alpha) by iGreed
 ## Notes: Turtle/OctoWoW quest helper - map pins, tracker, search.
 ## Author: iGreed
-## Version: 0.8.88
+## Version: 0.9.0
 ## SavedVariables: GreedQuestConfig
 ## SavedVariablesPerCharacter: GreedQuestCharDB
-## OptionalDeps: 
+## OptionalDeps: QuestProgressShare
 
 GreedQuest.lua
-Database.lua
 
-# Static
+# Data
 data\zones.lua
 data\zone-parents.lua
 data\minimap-sizes.lua
@@ -21,9 +20,8 @@ data\pvp-quests.lua
 data\calendar-events.lua
 data\quest-flags.lua
 data\quest-titles.lua
-
-# Heavy tables
 data\units.lua
+data\turtle-overlay.lua
 data\objects.lua
 data\items.lua
 data\quests.lua
@@ -31,14 +29,20 @@ data\quest-objectives.lua
 data\unit-names.lua
 data\waypoints.lua
 
-Core.lua
-Map.lua
-Minimap.lua
-Tracking.lua
-Config.lua
-Share.lua
-Tooltips.lua
-Tracker.lua
-Query.lua
-QuestDetail.lua
-Auto.lua
+# Core
+core\Database.lua
+core\Core.lua
+core\Query.lua
+core\Share.lua
+core\Auto.lua
+
+# Map
+map\Map.lua
+map\Minimap.lua
+map\Tracking.lua
+
+# UI
+ui\Config.lua
+ui\Tracker.lua
+ui\Tooltips.lua
+ui\QuestDetail.lua

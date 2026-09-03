@@ -85,7 +85,23 @@ function DB.MakeLazyDrops(entry)
 end
 
 function DB:MergeTurtle()
-  -- Data files are pre-merged Turtle/Octo tables.
+  local function apply(src, dest)
+    if not src or not dest then return end
+    local id, packed
+    for id, packed in pairs(src) do
+      local e = dest[id]
+      if e then
+        e._coords = packed
+        rawset(e, "coords", nil)
+        DB.MakeLazyCoords(e)
+      else
+        dest[id] = { _coords = packed }
+        DB.MakeLazyCoords(dest[id])
+      end
+    end
+  end
+  apply(GreedQuestDB.turtleUnitCoords, GreedQuestDB.units)
+  apply(GreedQuestDB.turtleObjectCoords, GreedQuestDB.objects)
 end
 
 function DB:BuildQuestIndexes()

@@ -481,6 +481,23 @@ function Tooltips:AppendItemNow()
   GameTooltip.gqAppending = nil
 end
 
+function Tooltips:QueueItemRefresh(delay)
+  if not self._itemRef then
+    self._itemRef = CreateFrame("Frame")
+  end
+  self._itemRef.t = 0
+  self._itemRef.delay = delay or 0.35
+  self._itemRef:SetScript("OnUpdate", function()
+    Tooltips._itemRef.t = (Tooltips._itemRef.t or 0) + (arg1 or 0.05)
+    if Tooltips._itemRef.t < Tooltips._itemRef.delay then return end
+    this:SetScript("OnUpdate", nil)
+    if GameTooltip:IsVisible() and not GameTooltip.gqPinTooltip then
+      GameTooltip.gqGQStamp = nil
+      Tooltips:AppendItemNow()
+    end
+  end)
+end
+
 local function TooltipLooksLikeUnit()
   if not UnitExists("mouseover") then return false end
   local tipName = GetTooltipItemName()
@@ -577,10 +594,26 @@ function Tooltips:Init()
     local original = obj[method]
     obj[method] = function(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
       local r1, r2, r3, r4, r5 = original(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
-      -- Bag addons rebuild the tooltip on a timer. Re-add immediately so
-      -- quest lines never flash off (a delayed append is the jump).
       GameTooltip.gqGQStamp = nil
       Tooltips:AppendItemNow()
+      -- Brand-new loot often has no item cache yet; poke GetItemInfo and
+      -- refresh once so vendor-price addons can write after the cache fills.
+      local link
+      if method == "SetBagItem" and a1 and a2 then
+        link = GetContainerItemLink(a1, a2)
+      elseif method == "SetInventoryItem" and a1 == "player" and a2 then
+        link = GetInventoryItemLink("player", a2)
+      end
+      if link then
+        local _, _, sid = string.find(link, "item:(%d+)")
+        local iid = tonumber(sid)
+        if iid then
+          local iname = GetItemInfo(iid)
+          if not iname then
+            Tooltips:QueueItemRefresh(0.35)
+          end
+        end
+      end
       return r1, r2, r3, r4, r5
     end
   end

@@ -281,8 +281,8 @@ function Core:IsSeasonalQuest(qid, title, tag)
   -- Explicit seasonal event ID on quest (calendar festivals)
   if qid and GQ.Database then
     local qdata = GQ.Database:GetQuest(qid)
-    local eventID = qdata and qdata["event"]
-    if eventID and GreedQuestDB and GreedQuestDB.seasonalEventIds and GreedQuestDB.seasonalEventIds[eventID] then
+    -- Any event-tagged quest is seasonal/holiday content
+    if qdata and qdata["event"] then
       return true
     end
   end
@@ -512,9 +512,14 @@ function Core:ShouldHideQuest(q)
   if GQ.Map and GQ.Map.IsQuestHidden and GQ.Map:IsQuestHidden(q.questID, q.title) then
     return true
   end
-  if q.questID and GreedQuestDB and GreedQuestDB.questFlags then
-    local f = GreedQuestDB.questFlags[q.questID]
-    if f and f["disabled"] then return true end
+  if q.questID and GreedQuestDB then
+    if GreedQuestDB.turtleRemovedQuests and GreedQuestDB.turtleRemovedQuests[q.questID] then
+      return true
+    end
+    if GreedQuestDB.questFlags then
+      local f = GreedQuestDB.questFlags[q.questID]
+      if f and f["disabled"] then return true end
+    end
   end
   local cfg = GreedQuestConfig and GreedQuestConfig.general
   if not cfg then return false end
@@ -783,7 +788,28 @@ function Core:ScanQuestLog()
       if not newKeys[key] then
         -- Left the log: only record completion if it was ready to turn in.
         -- Abandoning an incomplete quest must NOT mark it complete.
-        if oldq and oldq.complete then
+        local pending = self._pendingTurnIn
+        local pendingHit = false
+        if pending and oldq then
+          if pending.title and oldq.title and string.lower(pending.title) == string.lower(oldq.title) then
+            pendingHit = true
+          elseif pending.questID and oldq.questID and pending.questID == oldq.questID then
+            pendingHit = true
+          end
+        end
+        local allDone = oldq and oldq.complete
+        if not allDone and oldq and oldq.objectives and getn(oldq.objectives) > 0 then
+          allDone = true
+          local oi
+          for oi = 1, getn(oldq.objectives) do
+            if oldq.objectives[oi] and not oldq.objectives[oi].finished then
+              allDone = false
+              break
+            end
+          end
+        end
+        if oldq and (oldq.complete or pendingHit or allDone) then
+          if pendingHit then self._pendingTurnIn = nil end
           if not GreedQuestCharDB then GreedQuestCharDB = {} end
           if not GreedQuestCharDB.completed then GreedQuestCharDB.completed = {} end
           if not GreedQuestCharDB.completed[key] then
@@ -1496,9 +1522,16 @@ function Core:Init()
   f:RegisterEvent("ZONE_CHANGED_INDOORS")
   f:RegisterEvent("BAG_UPDATE")
   f:RegisterEvent("UNIT_INVENTORY_CHANGED")
+  f:RegisterEvent("QUEST_COMPLETE")
+  f:RegisterEvent("QUEST_FINISHED")
+  f:RegisterEvent("QUEST_TURNED_IN")
 
   f:SetScript("OnEvent", function()
-    if event == "QUEST_LOG_UPDATE" or event == "QUEST_WATCH_UPDATE" then
+    if event == "QUEST_COMPLETE" or event == "QUEST_FINISHED" or event == "QUEST_TURNED_IN" then
+      local title = GetTitleText and GetTitleText() or nil
+      Core._pendingTurnIn = { title = title, at = GetTime and GetTime() or 0 }
+      Core:RequestScanQuestLog(0.05)
+    elseif event == "QUEST_LOG_UPDATE" or event == "QUEST_WATCH_UPDATE" then
       Core:HideBlizzardTracker()
       Core:RequestScanQuestLog(0.12)
     elseif event == "BAG_UPDATE" then
