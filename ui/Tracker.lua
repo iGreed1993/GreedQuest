@@ -19,17 +19,31 @@ local function HexByte(x)
   return string.format("%02x", x)
 end
 
-function Tracker:QuestMarkerBullet(q)
+local function ObjectiveMobName(text)
+  if not text or text == "" then return nil end
+  local name = text
+  name = string.gsub(name, "%s+slain:.*$", "")
+  name = string.gsub(name, "%s+[Kk]illed:.*$", "")
+  name = string.gsub(name, ": %d+/%d+.*$", "")
+  name = string.gsub(name, "^%s+", "")
+  name = string.gsub(name, "%s+$", "")
+  if name == "" then return nil end
+  return name
+end
+
+function Tracker:QuestMarkerBullet(q, obj)
   local r, g, b = 0.67, 0.67, 0.67
   if GreedQuestConfig and GreedQuestConfig.map and GreedQuestConfig.map.colorCodedObjectives == false then
     return "|cffaaaaaa•|r "
   end
   if q and GQ.Map and GQ.Map.GetQuestMarkerColor then
-    -- Ensure colors are assigned (same palette / order as map pins)
-    if GQ.Map.RefreshQuestMarkers then
-      GQ.Map:RefreshQuestMarkers()
-    end
-    local c = GQ.Map:GetQuestMarkerColor(q)
+    local probe = {
+      questID = q.questID,
+      typ = (obj and (obj.type == "monster" or obj.type == "mob" or obj.type == "Kill")) and "Kill" or nil,
+      entityName = obj and ObjectiveMobName(obj.text) or nil,
+    }
+    if probe.entityName then probe.typ = "Kill" end
+    local c = GQ.Map:GetQuestMarkerColor(probe)
     if c then
       r, g, b = c[1] or r, c[2] or g, c[3] or b
     end
@@ -695,7 +709,7 @@ function Tracker:Refresh()
     if not self:IsCollapsed(q) and q.objectives and not q.complete then
       for _, obj in ipairs(q.objectives) do
         if lineIndex > MAX_LINES then break end
-        local icon = self:QuestMarkerBullet(q)
+        local icon = self:QuestMarkerBullet(q, obj)
         local otext = obj.text or ""
         if obj.finished then
           otext = "|cff55ff55" .. otext .. "|r"

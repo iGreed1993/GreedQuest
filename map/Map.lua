@@ -414,7 +414,17 @@ function Map:AssignKillEntityColors()
           end
         end
         while idx > pcount do idx = idx - pcount end
-        self._questMarkerColor["k:" .. qk .. ":" .. ents[i]] = palette[idx]
+        local col = palette[idx]
+        self._questMarkerColor["k:" .. qk .. ":" .. ents[i]] = col
+        local nm
+        if GreedQuestDB and GreedQuestDB.unitNames then
+          local nid = tonumber(ents[i])
+          nm = nid and GreedQuestDB.unitNames[nid]
+        end
+        if nm and nm ~= "" then
+          self._questMarkerColor["k:" .. qk .. ":" .. nm] = col
+          self._questMarkerColor["k:" .. qk .. ":" .. string.lower(nm)] = col
+        end
       end
     end
   end
@@ -460,10 +470,17 @@ end
 
 function Map:GetQuestMarkerColor(node)
   if not node or not self._questMarkerColor then return nil end
-  if node.typ == "Kill" and node.questID then
-    local ek = "k:" .. tostring(node.questID) .. ":" .. tostring(node.entityId or node.entityName or "")
-    if self._questMarkerColor[ek] then
-      return self._questMarkerColor[ek]
+  if node.questID and (node.typ == "Kill" or node.entityId or node.entityName) then
+    local qk = tostring(node.questID)
+    if node.entityId then
+      local ek = "k:" .. qk .. ":" .. tostring(node.entityId)
+      if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+    end
+    if node.entityName and node.entityName ~= "" then
+      local ek = "k:" .. qk .. ":" .. node.entityName
+      if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+      ek = "k:" .. qk .. ":" .. string.lower(node.entityName)
+      if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
     end
   end
   if not node.questID then return nil end
@@ -2117,16 +2134,19 @@ function Map:GetMiniLayout()
   local mapZoom = zoomTbl[mZoom] or zoomTbl[0]
   local mw = Minimap:GetWidth() or 140
   local mh = Minimap:GetHeight() or 140
+  -- DFUI and similar skins can report a stretched frame. Keep the
+  -- layout on the visible circle or pins run off the gold rim.
+  if mw < 80 or mw > 200 then mw = 140 end
+  if mh < 80 or mh > 200 then mh = 140 end
   local xScale = mapZoom / mapWidth
   local yScale = mapZoom / mapHeight
+  local radius = math.min(mw, mh) / 2
   return {
     xPlayer = pxf * 100,
     yPlayer = pyf * 100,
     xDraw = mw / xScale / 100,
     yDraw = mh / yScale / 100,
-    -- Show to the rim (and a little past). 0.9 hid Guard Thomas while
-    -- the Blizzard unit icon was still on the edge of the minimap.
-    maxR2 = ((math.max(mw, mh) / 2) * 1.35) * ((math.max(mw, mh) / 2) * 1.35),
+    maxR2 = (radius * 0.98) * (radius * 0.98),
     pxf = pxf,
     pyf = pyf,
     zoom = mZoom,
@@ -2512,6 +2532,10 @@ function Map:UpdateMinimapPins()
   local pinAlpha = (GreedQuestConfig.map.pinAlpha) or 1
 
   local layout = self:GetMiniLayout()
+  if layout then
+    self._lastMiniAssignX = layout.pxf
+    self._lastMiniAssignY = layout.pyf
+  end
   local miniIndex = 1
   for _, node in ipairs(list) do
     if miniIndex > getn(self.miniPins) then
@@ -2564,12 +2588,8 @@ function Map:UpdateMinimapPins()
       pin:SetHeight(size)
       pin:SetAlpha(pinAlpha)
       self:ApplyQuestMarker(pin, node, size)
-      if self:PositionMiniPin(pin, nx, ny, layout) then
-        miniIndex = miniIndex + 1
-      else
-        pin.node = nil
-        pin:Hide()
-      end
+      self:PositionMiniPin(pin, nx, ny, layout)
+      miniIndex = miniIndex + 1
     end
   end
   if self.ForCityEmbedsOnZone then
@@ -2610,12 +2630,8 @@ function Map:UpdateMinimapPins()
           pin:SetHeight(size)
           pin:SetAlpha(pinAlpha)
           self:ApplyQuestMarker(pin, copy, size)
-          if self:PositionMiniPin(pin, px, py, layout) then
-            miniIndex = miniIndex + 1
-          else
-            pin.node = nil
-            pin:Hide()
-          end
+          self:PositionMiniPin(pin, px, py, layout)
+          miniIndex = miniIndex + 1
         end
       end
     end)
@@ -3510,7 +3526,20 @@ function Map:Init()
     if elapsed > 0.03 then
       elapsed = 0
       if Map.playerZoneID and Map.miniPins then
-        Map:RepositionMiniPinsOnly()
+        local lx, ly = GetPlayerMapPosition("player")
+        if lx and ly and Map._lastMiniAssignX then
+          local dx = lx - Map._lastMiniAssignX
+          local dy = ly - (Map._lastMiniAssignY or 0)
+          -- ~1.5% of the zone: pick up pins that were not in the last pool
+          if (dx * dx + dy * dy) > 0.000225 then
+            Map._miniNeedsFull = true
+            Map:UpdateMinimapPins()
+          else
+            Map:RepositionMiniPinsOnly()
+          end
+        else
+          Map:RepositionMiniPinsOnly()
+        end
       end
     end
   end)
