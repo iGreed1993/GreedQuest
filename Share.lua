@@ -166,19 +166,83 @@ function Share:ParseMessage(sender, msg)
   end
 end
 
+local function QPSObjectiveFinished(text)
+  if not text then return false end
+  local _, _, a, b = string.find(text, "(%d+)%s*/%s*(%d+)")
+  a, b = tonumber(a), tonumber(b)
+  if a and b and b > 0 and a >= b then return true end
+  return false
+end
+
+function Share:GetQPSProgress(questID, title)
+  local results = {}
+  if not QPS_PartyProgress then return results end
+  local titles = {}
+  if title and title ~= "" then
+    titles[title] = true
+    titles[string.lower(title)] = true
+  end
+  if questID and GreedQuestDB and GreedQuestDB.questTitles and GreedQuestDB.questTitles[questID] then
+    local tn = GreedQuestDB.questTitles[questID]
+    titles[tn] = true
+    titles[string.lower(tn)] = true
+  end
+  local me = UnitName("player")
+  local sender, quests
+  for sender, quests in pairs(QPS_PartyProgress) do
+    if sender and sender ~= me and type(quests) == "table" then
+      local data
+      local tname, qdata
+      for tname, qdata in pairs(quests) do
+        if type(tname) == "string" and (titles[tname] or titles[string.lower(tname)]) then
+          data = qdata
+          break
+        end
+      end
+      if data and type(data) == "table" then
+        local objs = {}
+        local k, v
+        for k, v in pairs(data) do
+          if k ~= "complete" and type(v) == "string" then
+            table.insert(objs, { text = v, finished = QPSObjectiveFinished(v) })
+          end
+        end
+        table.insert(results, {
+          player = sender,
+          complete = data.complete and true or false,
+          objectives = objs,
+        })
+      end
+    end
+  end
+  return results
+end
+
 function Share:GetPartyProgress(questID, title)
   local results = {}
+  local seen = {}
   local keyId = questID and self:QuestKey(nil, questID) or nil
   local keyTitle = title and self:QuestKey(title, nil) or nil
 
   for player, quests in pairs(self.partyProgress) do
     local data = (keyId and quests[keyId]) or (keyTitle and quests[keyTitle])
     if data then
+      seen[player] = true
       table.insert(results, {
         player = player,
         complete = data.complete,
         objectives = data.objectives,
       })
+    end
+  end
+
+  local qps = self:GetQPSProgress(questID, title)
+  local i
+  for i = 1, getn(qps) do
+    local e = qps[i]
+    if e.player and not seen[e.player] then
+      seen[e.player] = true
+      table.insert(results, e)
     end
   end
   return results

@@ -465,8 +465,19 @@ local function GetTooltipItemName()
   return nil
 end
 
+local function TooltipLooksLikeUnit()
+  if not UnitExists("mouseover") then return false end
+  local tipName = GetTooltipItemName()
+  local unitName = UnitName("mouseover")
+  if not tipName or not unitName then return false end
+  tipName = string.gsub(tipName, "|c%x%x%x%x%x%x%x%x", "")
+  tipName = string.gsub(tipName, "|r", "")
+  return string.lower(tipName) == string.lower(unitName)
+end
+
 function Tooltips:QueueUnitOrItem(isUnit)
   if GameTooltip.gqPinTooltip then return end
+  if GameTooltip.gqAppending then return end
   if not self._defer then
     self._defer = CreateFrame("Frame")
   end
@@ -474,8 +485,8 @@ function Tooltips:QueueUnitOrItem(isUnit)
   self._pendT = 0
   self._defer:SetScript("OnUpdate", function()
     Tooltips._pendT = (Tooltips._pendT or 0) + (arg1 or 0.01)
-    -- Wait a tick so other tooltip addons (vendor prices) finish writing.
-    if Tooltips._pendT < 0.03 then return end
+    -- Wait so vendor-price addons finish writing, then we append once.
+    if Tooltips._pendT < 0.08 then return end
     if not GameTooltip:IsVisible() then
       this:SetScript("OnUpdate", nil)
       return
@@ -485,14 +496,13 @@ function Tooltips:QueueUnitOrItem(isUnit)
       return
     end
     if Tooltips._pendUnit then
-      if UnitExists("mouseover") then
+      if UnitExists("mouseover") and TooltipLooksLikeUnit() then
         local name = UnitName("mouseover")
         if name then
           local shift = IsShiftKeyDown() and 1 or 0
           if Tooltips._lastShift ~= shift then
             Tooltips._lastShift = shift
             if shift == 0 and GameTooltip.gqGQShiftObjs then
-              -- Rebuild the unit tooltip without objective text
               GameTooltip.gqGQStamp = nil
               GameTooltip.gqGQShiftObjs = nil
               if GameTooltip.SetUnit then
@@ -512,7 +522,9 @@ function Tooltips:QueueUnitOrItem(isUnit)
     else
       local name = GetTooltipItemName()
       if name and name ~= "" then
+        GameTooltip.gqAppending = 1
         Tooltips:AppendQuestProgress(name, false)
+        GameTooltip.gqAppending = nil
       end
       this:SetScript("OnUpdate", nil)
     end
@@ -526,17 +538,18 @@ function Tooltips:Init()
     GameTooltip.gqPinTooltip = nil
     GameTooltip.gqGQStamp = nil
     GameTooltip.gqGQShiftObjs = nil
+    GameTooltip.gqAppending = nil
     Tooltips._lastShift = nil
     if oldHide then oldHide() end
   end)
 
   GameTooltip:SetScript("OnShow", function()
     if oldShow then oldShow() end
-    if GameTooltip.gqPinTooltip then return end
-    if UnitExists("mouseover") then
+    if GameTooltip.gqPinTooltip or GameTooltip.gqAppending then return end
+    -- Only units use OnShow. Item slots must go through SetInventoryItem
+    -- so we can return hasItem (paperdoll shows "Feet" if that is lost).
+    if TooltipLooksLikeUnit() then
       Tooltips:QueueUnitOrItem(true)
-    else
-      Tooltips:QueueUnitOrItem(false)
     end
   end)
 
@@ -544,8 +557,9 @@ function Tooltips:Init()
     if not obj or not obj[method] then return end
     local original = obj[method]
     obj[method] = function(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
-      original(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
+      local r1, r2, r3, r4, r5 = original(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
       Tooltips:QueueUnitOrItem(false)
+      return r1, r2, r3, r4, r5
     end
   end
 
