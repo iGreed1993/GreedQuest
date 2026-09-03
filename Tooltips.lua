@@ -405,7 +405,7 @@ function Tooltips:AppendQuestProgress(name, isUnit)
   if getn(related) == 0 then
     if addedAvail then
       GameTooltip.gqGQStamp = stamp
-      GameTooltip:Show()
+      Tooltips:SafeShow()
     end
     return
   end
@@ -455,7 +455,7 @@ function Tooltips:AppendQuestProgress(name, isUnit)
     end
   end
 
-  GameTooltip:Show()
+  Tooltips:SafeShow()
 end
 
 local function GetTooltipItemName()
@@ -463,6 +463,22 @@ local function GetTooltipItemName()
     return GameTooltipTextLeft1:GetText()
   end
   return nil
+end
+
+function Tooltips:SafeShow()
+  if not GameTooltip:IsVisible() then return end
+  GameTooltip.gqAppending = 1
+  GameTooltip:Show()
+  GameTooltip.gqAppending = nil
+end
+
+function Tooltips:AppendItemNow()
+  if GameTooltip.gqPinTooltip then return end
+  local name = GetTooltipItemName()
+  if not name or name == "" then return end
+  GameTooltip.gqAppending = 1
+  self:AppendQuestProgress(name, false)
+  GameTooltip.gqAppending = nil
 end
 
 local function TooltipLooksLikeUnit()
@@ -535,10 +551,13 @@ function Tooltips:Init()
   local oldShow = GameTooltip:GetScript("OnShow")
   local oldHide = GameTooltip:GetScript("OnHide")
   GameTooltip:SetScript("OnHide", function()
+    if GameTooltip.gqAppending then
+      if oldHide then oldHide() end
+      return
+    end
     GameTooltip.gqPinTooltip = nil
     GameTooltip.gqGQStamp = nil
     GameTooltip.gqGQShiftObjs = nil
-    GameTooltip.gqAppending = nil
     Tooltips._lastShift = nil
     if oldHide then oldHide() end
   end)
@@ -558,7 +577,10 @@ function Tooltips:Init()
     local original = obj[method]
     obj[method] = function(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
       local r1, r2, r3, r4, r5 = original(self, a1, a2, a3, a4, a5, a6, a7, a8, a9)
-      Tooltips:QueueUnitOrItem(false)
+      -- Bag addons rebuild the tooltip on a timer. Re-add immediately so
+      -- quest lines never flash off (a delayed append is the jump).
+      GameTooltip.gqGQStamp = nil
+      Tooltips:AppendItemNow()
       return r1, r2, r3, r4, r5
     end
   end
