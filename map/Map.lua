@@ -371,6 +371,53 @@ function Map:RefreshQuestMarkers()
     end
   end
   self:MergeSharedObjectiveColors()
+  self:AssignKillEntityColors()
+end
+
+function Map:AssignKillEntityColors()
+  if not self._questMarkerColor or not self.nodes then return end
+  local palette = self.QUEST_MARKER_PALETTE
+  local pcount = palette and getn(palette) or 0
+  if pcount < 1 then return end
+  local byQuest = {}
+  local mapID, list, _, n
+  for mapID, list in pairs(self.nodes) do
+    if list then
+      for _, n in ipairs(list) do
+        if n.typ == "Kill" and n.questID then
+          local qk = tostring(n.questID)
+          local ek = tostring(n.entityId or n.entityName or "")
+          if ek ~= "" then
+            if not byQuest[qk] then byQuest[qk] = {} end
+            local seen = false
+            local j
+            for j = 1, getn(byQuest[qk]) do
+              if byQuest[qk][j] == ek then seen = true break end
+            end
+            if not seen then table.insert(byQuest[qk], ek) end
+          end
+        end
+      end
+    end
+  end
+  local qk, ents
+  for qk, ents in pairs(byQuest) do
+    if getn(ents) > 1 then
+      local base = self._questMarkerColor[qk]
+      local i
+      for i = 1, getn(ents) do
+        local idx = i
+        if base then
+          local pi
+          for pi = 1, pcount do
+            if palette[pi] == base then idx = pi + i - 1 break end
+          end
+        end
+        while idx > pcount do idx = idx - pcount end
+        self._questMarkerColor["k:" .. qk .. ":" .. ents[i]] = palette[idx]
+      end
+    end
+  end
 end
 
 function Map:MergeSharedObjectiveColors()
@@ -412,7 +459,14 @@ function Map:MergeSharedObjectiveColors()
 end
 
 function Map:GetQuestMarkerColor(node)
-  if not node or not node.questID or not self._questMarkerColor then return nil end
+  if not node or not self._questMarkerColor then return nil end
+  if node.typ == "Kill" and node.questID then
+    local ek = "k:" .. tostring(node.questID) .. ":" .. tostring(node.entityId or node.entityName or "")
+    if self._questMarkerColor[ek] then
+      return self._questMarkerColor[ek]
+    end
+  end
+  if not node.questID then return nil end
   return self._questMarkerColor[tostring(node.questID)]
 end
 
@@ -1068,6 +1122,28 @@ function Map:ShowPinTooltip(pin)
     tip:AddLine(title, 1, 0.82, 0)
   else
     tip:AddLine("Unknown quest", 1, 0.2, 0.2)
+  end
+
+  do
+    local qlvl = n.level
+    if not qlvl and n.questID and GreedQuestDB and GreedQuestDB.quests then
+      local qd = GreedQuestDB.quests[n.questID]
+      if qd then qlvl = qd["lvl"] or qd["min"] end
+    end
+    if not qlvl and n.questID and GQ.Core and GQ.Core.GetQuestByID then
+      local qq = GQ.Core:GetQuestByID(n.questID)
+      if qq then qlvl = qq.level end
+    end
+    local mlvl = n.mobLevel
+    if not mlvl and n.entityId and GreedQuestDB and GreedQuestDB.units then
+      local u = GreedQuestDB.units[n.entityId]
+      if u and u["lvl"] then mlvl = u["lvl"] end
+    end
+    if mlvl and n.typ == "Kill" then
+      tip:AddLine("Mob level  " .. tostring(mlvl), 0.75, 0.75, 0.75)
+    elseif qlvl then
+      tip:AddLine("Quest level  " .. tostring(qlvl), 0.75, 0.75, 0.75)
+    end
   end
 
   if n.source == "tracking" then
@@ -1994,8 +2070,8 @@ local MINI_ZOOM_INDOOR = {
   [5] = 50,
 }
 
--- Indoor zoom detect. SetZoom is required when the two CVars match, but
--- doing it on every pin blurs party-edge arrows — cache by zoom for 2s.
+-- Indoor zoom detect. Do not call SetZoom (it blurs Blizzard party arrows).
+-- When CVars are equal / unknown, assume outdoor so pins use the wider range.
 local _indoorCache, _indoorZoom, _indoorAt = nil, nil, 0
 local function MinimapIsIndoor()
   local z = 0
@@ -2005,19 +2081,11 @@ local function MinimapIsIndoor()
     return _indoorCache
   end
   local inside = false
-  if GetCVar and Minimap and Minimap.SetZoom then
-    local curZoom = GetCVar("minimapZoom")
-    local curInside = GetCVar("minimapInsideZoom")
-    if curZoom and curInside and curZoom == curInside then
-      if z >= 3 then
-        Minimap:SetZoom(0)
-      else
-        Minimap:SetZoom(3)
-      end
-      inside = (tonumber(GetCVar("minimapInsideZoom")) or 0) == Minimap:GetZoom()
-      Minimap:SetZoom(z)
-    else
-      inside = curInside and (tonumber(curInside) == z)
+  if GetCVar then
+    local curZoom = tonumber(GetCVar("minimapZoom"))
+    local curInside = tonumber(GetCVar("minimapInsideZoom"))
+    if curZoom and curInside and curZoom ~= curInside then
+      inside = (curInside == z)
     end
   end
   _indoorCache = inside and 0 or 1
@@ -2056,7 +2124,9 @@ function Map:GetMiniLayout()
     yPlayer = pyf * 100,
     xDraw = mw / xScale / 100,
     yDraw = mh / yScale / 100,
-    maxR2 = ((mw / 2) * 0.9) * ((mw / 2) * 0.9),
+    -- Show to the rim (and a little past). 0.9 hid Guard Thomas while
+    -- the Blizzard unit icon was still on the edge of the minimap.
+    maxR2 = ((math.max(mw, mh) / 2) * 1.35) * ((math.max(mw, mh) / 2) * 1.35),
     pxf = pxf,
     pyf = pyf,
     zoom = mZoom,
@@ -2612,6 +2682,7 @@ function Map:BuildNodesFromQuestLog()
     if qid then
       local skip = false
       if self:IsQuestHidden(qid, q.title) then skip = true end
+      if GQ.Core and GQ.Core.IsTrackedInLog and not GQ.Core:IsTrackedInLog(q) then skip = true end
       if GQ.Core and GQ.Core.ShouldHideQuest and GQ.Core:ShouldHideQuest(q) then skip = true end
       if zoneOnly and GQ.Core and GQ.Core.QuestInCurrentZone and not GQ.Core:QuestInCurrentZone(q) then skip = true end
       if not skip then
@@ -2775,6 +2846,12 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
     end
     local entry = isUnit and DB:GetUnit(id) or DB:GetObject(id)
     if not entry then return end
+    if isUnit and entry["lvl"] and not extra.mobLevel then
+      extra.mobLevel = entry["lvl"]
+    end
+    if not extra.level and logQuest then
+      extra.level = logQuest.level
+    end
     local coords = entry.coords
     if not coords then return end
 
@@ -2818,6 +2895,8 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
           itemName = extra.itemName,
           dropChance = extra.dropChance,
           talkTo = extra.talkTo,
+          level = extra.level,
+          mobLevel = extra.mobLevel,
         })
       end
     end

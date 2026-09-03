@@ -200,15 +200,20 @@ function QD:BuildText(questID, title)
       local numRew = GetNumQuestLogRewards and GetNumQuestLogRewards() or 0
       local numChoice = GetNumQuestLogChoices and GetNumQuestLogChoices() or 0
       local xp = 0
-      if GetQuestLogRewardXP then xp = GetQuestLogRewardXP() or 0 end
+      if GQ.QuestXP and GQ.QuestXP.AdjustedXP then
+        xp = GQ.QuestXP:AdjustedXP(qid, logQ.level) or 0
+      elseif GetQuestLogRewardXP then
+        xp = GetQuestLogRewardXP() or 0
+      end
 
       table.insert(lines, " ")
-      table.insert(lines, "|cffffd100Rewards|r")
+      if xp and xp > 0 then
+        table.insert(lines, "|cffffd100Rewards|r  |cff33ffcc" .. tostring(xp) .. " XP|r")
+      else
+        table.insert(lines, "|cffffd100Rewards|r")
+      end
       if money and money > 0 then
         table.insert(lines, "  Money: |cffffffff" .. tostring(money) .. "c|r")
-      end
-      if xp and xp > 0 then
-        table.insert(lines, "  XP: |cffffffff" .. tostring(xp) .. "|r")
       end
       if numRew and numRew > 0 and GetQuestLogRewardInfo then
         for i = 1, numRew do

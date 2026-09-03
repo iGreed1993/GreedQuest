@@ -211,6 +211,7 @@ GQ:SetScript("OnEvent", function()
     if GQ.Tooltips and GQ.Tooltips.Init then GQ.Tooltips:Init() end
     if GQ.Query and GQ.Query.Init then GQ.Query:Init() end
     if GQ.Auto and GQ.Auto.Init then GQ.Auto:Init() end
+    if GQ.QuestXP and GQ.QuestXP.Init then GQ.QuestXP:Init() end
   end
 end)
 
