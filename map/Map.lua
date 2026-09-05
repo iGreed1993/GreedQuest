@@ -1901,9 +1901,11 @@ function Map:ZoneToDisplayedMapCoords(zoneID, x, y)
     shownZone = self:GetDisplayedZoneID()
   end
 
-  -- Zone map view (including Turtle custom zones): use local 0-100 directly
+  -- Zone map view only (never while the two-continent / continent map is up)
   if shownZone and zoneID and tonumber(shownZone) == tonumber(zoneID) then
-    return tonumber(x), tonumber(y)
+    if not self:IsContinentView() then
+      return tonumber(x), tonumber(y)
+    end
   end
 
   local contX, contY, wantCont = self:ZoneToContinentCoords(zoneID, x, y)
@@ -1987,8 +1989,8 @@ end
 
 function Map:GetDisplayedZoneID()
   -- Resolve the zone the world map is showing.
-  -- Returns nil on continent view OR when the open zone is not in our DB
-  -- (do NOT fall back to player zone — that causes wrong pins on custom Turtle zones).
+  -- Returns nil on continent / cosmic view OR when the open zone is not in our DB
+  -- (do NOT fall back to the player's real zone — that paints zone coords on the world map).
   if not self.zoneByName then
     self:ResolvePlayerZone()
   end
@@ -2000,28 +2002,22 @@ function Map:GetDisplayedZoneID()
   local z = GetCurrentMapZone()
   local cont = GetCurrentMapContinent() or 0
 
-  -- Instance / detail maps report continent 0 or -1 and often zone 0.
-  -- Identify them by the map title or the player's real zone name.
-  if (not z or z == 0) or cont <= 0 then
-    local title
-    if WorldMapFrameTitle and WorldMapFrameTitle.GetText then
-      title = WorldMapFrameTitle:GetText()
-    end
-    local id = self:LookupZoneName(title)
-    if not id then
-      id = self:LookupZoneName((GetRealZoneText and GetRealZoneText()) or "")
-    end
-    if id and GQ.Database and GQ.Database.IsDungeonZone and GQ.Database:IsDungeonZone(id) then
-      return id
-    end
-    if (not z or z == 0) then
-      return nil  -- continent / cosmic
-    end
+  -- Cosmic / continent: zone index 0. Never use GetRealZoneText here.
+  if not z or z == 0 then
+    -- Instance detail maps also report zone 0, but the map TITLE is the dungeon.
     if cont <= 0 then
-      return id
+      local title
+      if WorldMapFrameTitle and WorldMapFrameTitle.GetText then
+        title = WorldMapFrameTitle:GetText()
+      end
+      local id = self:LookupZoneName(title)
+      if id and GQ.Database and GQ.Database.IsDungeonZone and GQ.Database:IsDungeonZone(id) then
+        return id
+      end
     end
+    return nil
   end
-  if cont == 0 then
+  if cont == 0 or cont == -1 then
     return nil
   end
 
@@ -2315,7 +2311,12 @@ end
 function Map:UpdateWorldPins()
   local mapOpen = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
   if not mapOpen then return end
-  local paintKey = tostring(self:IsContinentView() and "C" or (self:GetDisplayedZoneID() or "?"))
+  local curCont = 0
+  if GetCurrentMapContinent then curCont = GetCurrentMapContinent() or 0 end
+  local curZone = 0
+  if GetCurrentMapZone then curZone = GetCurrentMapZone() or 0 end
+  local paintKey = tostring(curCont) .. ":" .. tostring(curZone)
+    .. ":" .. tostring(self:GetDisplayedZoneID() or "?")
     .. ":" .. tostring(self._nodeRev or 0)
     .. ":" .. tostring((GreedQuestConfig.map and GreedQuestConfig.map.iconStyle) or "")
   if self._worldPaintKey == paintKey and self._worldPaintDone then
