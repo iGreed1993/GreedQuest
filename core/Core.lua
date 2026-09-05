@@ -458,6 +458,10 @@ function Core:IsEliteStyleQuest(qid, title, tag, header)
       return true
     end
   end
+  if qid and GreedQuestDB and GreedQuestDB.questKind then
+    local k = GreedQuestDB.questKind[qid]
+    if k == "d" or k == "e" or k == "r" then return true end
+  end
   local lower = string.lower(title or "")
   if string.find(lower, "(elite)", 1, true)
      or string.find(lower, "[dungeon]", 1, true)
@@ -1186,24 +1190,17 @@ function Core:StartEligibleScan()
     cancelled = false,
   }
 
-  if not self.scanFrame then
-    self.scanFrame = CreateFrame("Frame")
-  end
-
   local BATCH = self.BATCH_SIZE or 80
-  self.scanFrame:SetScript("OnUpdate", function()
+  local function step()
     local state = Core.scanState
-    if not state or state.cancelled then
-      Core.scanFrame:SetScript("OnUpdate", nil)
-      return
-    end
-
+    if not state or state.cancelled then return end
     local DB = GQ.Database
+    if not DB then return end
     local titles = GreedQuestDB and GreedQuestDB.questTitles or {}
     local n = getn(state.candidates)
     local last = state.index + BATCH - 1
     if last > n then last = n end
-
+    local i
     for i = state.index, last do
       local qid = state.candidates[i]
       local qdata = DB:GetQuest(qid)
@@ -1227,26 +1224,31 @@ function Core:StartEligibleScan()
         end
       end
     end
-
     state.index = last + 1
     if state.index > n then
-      -- finished
-      Core.scanFrame:SetScript("OnUpdate", nil)
       if not state.cancelled and state.key == Core:EligibleCacheKey() then
         Core.eligibleCache = state.results
         Core.eligibleCacheKey = state.key
         Core.availableCache = Core:FilterEligibleToAvailable(state.results)
         Core.scanState = nil
         GQ:Debug("Available scan done (" .. getn(Core.availableCache) .. " shown)")
-        -- Rebuild pins so newly-unlocked givers appear on mini + world
         if GQ.Map and GQ.Map.BuildNodesFromQuestLog then
           GQ.Map:BuildNodesFromQuestLog()
         end
       else
         Core.scanState = nil
       end
+    else
+      if GQ.Scheduler then
+        GQ.Scheduler:Enqueue(step, "eligible scan", "eligible")
+      end
     end
-  end)
+  end
+  if GQ.Scheduler then
+    GQ.Scheduler:Enqueue(step, "eligible scan", "eligible")
+  else
+    step()
+  end
 end
 
 function Core:NotifyFiltersChanged()

@@ -84,28 +84,88 @@ local function CurrentQuest()
 end
 
 local origRewardText
+local xpLabel
+
+local function XPString(xp, grey)
+  if not xp or xp < 0 then return nil end
+  if xp == 0 then
+    return "|cff8888880 XP|r"
+  elseif grey then
+    return "|cffaaaaaa" .. tostring(xp) .. " XP|r"
+  end
+  return "|cff33ffcc" .. tostring(xp) .. " XP|r"
+end
+
+local function HasItemOrMoneyReward()
+  local money = (GetRewardMoney and GetRewardMoney()) or 0
+  local nRew = (GetNumQuestRewards and GetNumQuestRewards()) or 0
+  local nChoice = (GetNumQuestChoices and GetNumQuestChoices()) or 0
+  local spell
+  if GetRewardSpell then spell = GetRewardSpell() end
+  if money and money > 0 then return true end
+  if nRew and nRew > 0 then return true end
+  if nChoice and nChoice > 0 then return true end
+  if spell then return true end
+  return false
+end
+
+local function EnsureXPLabel()
+  if xpLabel then return xpLabel end
+  local parent = QuestFrame
+  if not parent then return nil end
+  xpLabel = parent:CreateFontString("GreedQuestXPLabel", "OVERLAY", "GameFontNormal")
+  xpLabel:SetJustifyH("LEFT")
+  xpLabel:Hide()
+  return xpLabel
+end
+
+local function HideXPLabel()
+  if xpLabel then xpLabel:Hide() end
+end
+
+local function PlaceUnderObjectives(text)
+  local lab = EnsureXPLabel()
+  if not lab then return end
+  local anchor = QuestObjectiveText
+  if not (anchor and anchor.IsShown and anchor:IsShown()) then
+    anchor = QuestProgressRequiredItemsText
+  end
+  if not (anchor and anchor.IsShown and anchor:IsShown()) then
+    anchor = QuestTitleText or QuestNpcNameFrame
+  end
+  lab:ClearAllPoints()
+  if anchor then
+    lab:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -10)
+  else
+    lab:SetPoint("TOPLEFT", QuestFrame, "TOPLEFT", 20, -160)
+  end
+  lab:SetText(text)
+  lab:Show()
+end
 
 local function ApplyRewardLabel()
-  local fs = QuestRewardTitleText
-  if not fs or not fs.SetText then return end
-  if not origRewardText then
-    origRewardText = fs:GetText() or (REWARDS or "Rewards")
-  end
   local qid, _, lvl = CurrentQuest()
   local xp, grey = QX:AdjustedXP(qid, lvl)
-  if not xp or xp < 0 then
+  local extra = XPString(xp, grey)
+
+  local fs = QuestRewardTitleText
+  if fs and fs.SetText then
+    if not origRewardText then
+      origRewardText = fs:GetText() or (REWARDS or "Rewards")
+    end
+    if extra and HasItemOrMoneyReward() and fs:IsShown() then
+      fs:SetText(origRewardText .. "   " .. extra)
+      HideXPLabel()
+      return
+    end
     fs:SetText(origRewardText)
-    return
   end
-  local extra
-  if xp == 0 then
-    extra = "|cff888888(0 XP)|r"
-  elseif grey then
-    extra = "|cffaaaaaa" .. tostring(xp) .. " XP|r"
+
+  if extra then
+    PlaceUnderObjectives(extra)
   else
-    extra = "|cff33ffcc" .. tostring(xp) .. " XP|r"
+    HideXPLabel()
   end
-  fs:SetText(origRewardText .. "   " .. extra)
 end
 
 local function RestoreRewardLabel()
@@ -113,6 +173,7 @@ local function RestoreRewardLabel()
   if fs and origRewardText and fs.SetText then
     fs:SetText(origRewardText)
   end
+  HideXPLabel()
 end
 
 function QX:Init()
@@ -120,12 +181,21 @@ function QX:Init()
   self._inited = true
   local f = CreateFrame("Frame")
   f:RegisterEvent("QUEST_DETAIL")
+  f:RegisterEvent("QUEST_PROGRESS")
   f:RegisterEvent("QUEST_COMPLETE")
   f:RegisterEvent("QUEST_FINISHED")
   f:RegisterEvent("QUEST_GREETING")
   f:SetScript("OnEvent", function()
-    if event == "QUEST_DETAIL" or event == "QUEST_COMPLETE" then
-      ApplyRewardLabel()
+    if event == "QUEST_DETAIL" or event == "QUEST_COMPLETE" or event == "QUEST_PROGRESS" then
+      -- Blizzard hides the Rewards header after our event; wait one frame.
+      if not QX._defer then QX._defer = CreateFrame("Frame") end
+      QX._defer.t = 0
+      QX._defer:SetScript("OnUpdate", function()
+        QX._defer.t = QX._defer.t + (arg1 or 0.01)
+        if QX._defer.t < 0.05 then return end
+        QX._defer:SetScript("OnUpdate", nil)
+        ApplyRewardLabel()
+      end)
     else
       RestoreRewardLabel()
     end

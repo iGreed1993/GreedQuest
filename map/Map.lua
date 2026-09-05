@@ -1159,7 +1159,14 @@ function Map:ShowPinTooltip(pin)
     if mlvl and n.typ == "Kill" then
       tip:AddLine("Mob level  " .. tostring(mlvl), 0.75, 0.75, 0.75)
     elseif qlvl then
-      tip:AddLine("Quest level  " .. tostring(qlvl), 0.75, 0.75, 0.75)
+      local shown = qlvl
+      if GQ.Core and GQ.Core.FormatQuestLevel then
+        shown = GQ.Core:FormatQuestLevel(qlvl, n.questID, title, n.tag, n.logHeader)
+      end
+      tip:AddLine("Quest level  " .. tostring(shown), 0.75, 0.75, 0.75)
+    end
+    if n.entrance then
+      tip:AddLine("Dungeon entrance", 0.7, 0.85, 1)
     end
   end
 
@@ -1967,6 +1974,17 @@ function Map:ForCityEmbedsOnZone(parentZone, fn)
   end
 end
 
+function Map:LookupZoneName(name)
+  if not name or name == "" then return nil end
+  if not self.zoneByName then self:ResolvePlayerZone() end
+  local lower = string.lower(name)
+  lower = string.gsub(lower, "%s+$", "")
+  if self.zoneByName and self.zoneByName[lower] then
+    return self.zoneByName[lower]
+  end
+  return nil
+end
+
 function Map:GetDisplayedZoneID()
   -- Resolve the zone the world map is showing.
   -- Returns nil on continent view OR when the open zone is not in our DB
@@ -1980,10 +1998,29 @@ function Map:GetDisplayedZoneID()
   end
 
   local z = GetCurrentMapZone()
-  if not z or z == 0 then
-    return nil  -- continent / cosmic
-  end
   local cont = GetCurrentMapContinent() or 0
+
+  -- Instance / detail maps report continent 0 or -1 and often zone 0.
+  -- Identify them by the map title or the player's real zone name.
+  if (not z or z == 0) or cont <= 0 then
+    local title
+    if WorldMapFrameTitle and WorldMapFrameTitle.GetText then
+      title = WorldMapFrameTitle:GetText()
+    end
+    local id = self:LookupZoneName(title)
+    if not id then
+      id = self:LookupZoneName((GetRealZoneText and GetRealZoneText()) or "")
+    end
+    if id and GQ.Database and GQ.Database.IsDungeonZone and GQ.Database:IsDungeonZone(id) then
+      return id
+    end
+    if (not z or z == 0) then
+      return nil  -- continent / cosmic
+    end
+    if cont <= 0 then
+      return id
+    end
+  end
   if cont == 0 then
     return nil
   end
@@ -2276,6 +2313,17 @@ function Map:ContinentAvailableAllowed(mapID, typ)
 end
 
 function Map:UpdateWorldPins()
+  local mapOpen = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
+  if not mapOpen then return end
+  local paintKey = tostring(self:IsContinentView() and "C" or (self:GetDisplayedZoneID() or "?"))
+    .. ":" .. tostring(self._nodeRev or 0)
+    .. ":" .. tostring((GreedQuestConfig.map and GreedQuestConfig.map.iconStyle) or "")
+  if self._worldPaintKey == paintKey and self._worldPaintDone then
+    return
+  end
+  self._worldPaintKey = paintKey
+  self._worldPaintDone = false
+
   self:EnsureWorldPool()
   self:EnsureClusters()
   self:RefreshQuestMarkers()
@@ -2290,8 +2338,6 @@ function Map:UpdateWorldPins()
     if pin.outline then pin.outline:Hide() end
   end
 
-  local mapOpen = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
-  if not mapOpen then return end
   if self.HideBlizzardQuestPOIs then self:HideBlizzardQuestPOIs() end
   if not GreedQuestConfig or not GreedQuestConfig.map then return end
 
@@ -2489,6 +2535,7 @@ function Map:UpdateWorldPins()
       end)
     end
   end
+  self._worldPaintDone = true
 end
 
 -- MINIMAP ONLY — independent of world map open/closed
@@ -2674,6 +2721,10 @@ function Map:RepositionMiniPinsOnly()
 end
 
 function Map:BuildNodesFromQuestLog()
+  self._nodeRev = (self._nodeRev or 0) + 1
+  self._buildGen = (self._buildGen or 0) + 1
+  local gen = self._buildGen
+  self._worldPaintKey = nil
   self:ClearNodes("questlog")
   self:ClearNodes("available")
 
@@ -2705,6 +2756,7 @@ function Map:BuildNodesFromQuestLog()
         if cfg.showObjectives or cfg.showGivers or cfg.showTurnins then
           local qdata = DB:GetQuest(qid)
           if qdata then
+            if gen ~= self._buildGen then return end
             self:AddQuestNodes(qid, qdata, q.title, q.complete)
             pinned = pinned + 1
           else
@@ -2994,6 +3046,57 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
         placeEntity(oid, false, self.ICON.object, self.LAYER.objective, "Object")
       end
     end
+    -- Explore / scout area triggers (Jasperlode, Fargodeep, etc.)
+    local aids = qdata["obj"]["A"]
+    if not aids and GreedQuestDB and GreedQuestDB.questAreatriggers then
+      aids = GreedQuestDB.questAreatriggers[qid]
+    end
+    if aids and not EventObjectiveDone() then
+      local ai, aid
+      for ai = 1, getn(aids) do
+        aid = aids[ai]
+        local at = DB:GetAreatrigger(aid)
+        if at and at.coords then
+          local _, c
+          for _, c in ipairs(at.coords) do
+            local x, y, zone = c[1], c[2], c[3]
+            if zone and zone > 0 and x and y then
+              self:AddNode({
+                mapID = zone, x = x, y = y,
+                title = title or ("Quest "..qid),
+                texture = self.ICON.event,
+                layer = self.LAYER.objective,
+                quest = title, questID = qid,
+                typ = "Event", source = "questlog",
+                level = logQuest and logQuest.level,
+              })
+            end
+          end
+        end
+      end
+    end
+    -- Tame / use-item-on-target (hunter Taming the Beast, etc.)
+    local rods = qdata["obj"]["IR"]
+    if not rods and GreedQuestDB and GreedQuestDB.questItemReq then
+      rods = GreedQuestDB.questItemReq[qid]
+    end
+    if rods then
+      local _, itemID
+      for _, itemID in pairs(rods) do
+        local targets = DB:GetItemReqTargets(itemID)
+        if targets then
+          local ti, tid
+          for ti = 1, getn(targets) do
+            tid = targets[ti]
+            if tid and tid > 0 then
+              placeEntity(tid, true, self.ICON.kill, self.LAYER.objective, "Kill")
+            elseif tid and tid < 0 then
+              placeEntity(-tid, false, self.ICON.object, self.LAYER.objective, "Object")
+            end
+          end
+        end
+      end
+    end
     -- Item objectives: units/objects that drop the item (loot)
     local skipLoot = false
     if logQuest and logQuest.objectives then
@@ -3072,6 +3175,66 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
         end
       end
     end
+  end
+
+  -- Outdoor door pin while a dungeon quest is still in progress
+  if cfg.showObjectives and not isComplete then
+    self:AddDungeonEntrancePins(qid, qdata, title, logQuest)
+  end
+end
+
+function Map:AddDungeonEntrancePins(qid, qdata, title, logQuest)
+  local DB = GQ.Database
+  if not DB or not DB.IsDungeonZone then return end
+  local seen = {}
+  local function considerZone(zid)
+    if not zid or seen[zid] or not DB:IsDungeonZone(zid) then return end
+    seen[zid] = true
+    local doors = DB:GetDungeonEntrances(zid)
+    if not doors then return end
+    local _, door
+    for _, door in ipairs(doors) do
+      local oz, ox, oy = door[1], door[2], door[3]
+      if oz and ox and oy then
+        self:AddNode({
+          mapID = oz,
+          x = ox,
+          y = oy,
+          title = title or ("Quest "..qid),
+          texture = self.ICON.event,
+          layer = self.LAYER.objective,
+          quest = title,
+          questID = qid,
+          typ = "Event",
+          source = "questlog",
+          entrance = true,
+          level = logQuest and logQuest.level,
+        })
+      end
+    end
+  end
+  local function walkUnits(list)
+    if not list then return end
+    local _, uid
+    for _, uid in pairs(list) do
+      local u = DB:GetUnit(uid)
+      if u and u.coords then
+        local _, c
+        for _, c in ipairs(u.coords) do
+          considerZone(c[3])
+        end
+      end
+    end
+  end
+  if qdata and qdata["obj"] then
+    walkUnits(qdata["obj"]["U"])
+  end
+  if qdata and qdata["end"] then
+    walkUnits(qdata["end"]["U"])
+  end
+  -- Also honor compiled dungeon kind even if coords didn't unpack
+  if DB.QuestKind and DB:QuestKind(qid) == "d" then
+    -- nothing extra; considerZone already fired from units if present
   end
 end
 
@@ -3523,24 +3686,33 @@ function Map:Init()
   local elapsed = 0
   ticker:SetScript("OnUpdate", function()
     elapsed = elapsed + (arg1 or 0.03)
-    if elapsed > 0.03 then
-      elapsed = 0
-      if Map.playerZoneID and Map.miniPins then
-        local lx, ly = GetPlayerMapPosition("player")
-        if lx and ly and Map._lastMiniAssignX then
-          local dx = lx - Map._lastMiniAssignX
-          local dy = ly - (Map._lastMiniAssignY or 0)
-          -- ~1.5% of the zone: pick up pins that were not in the last pool
-          if (dx * dx + dy * dy) > 0.000225 then
-            Map._miniNeedsFull = true
-            Map:UpdateMinimapPins()
-          else
-            Map:RepositionMiniPinsOnly()
-          end
-        else
-          Map:RepositionMiniPinsOnly()
-        end
+    if elapsed < 0.05 then return end
+    elapsed = 0
+    if not Map.playerZoneID then return end
+    -- Idle: no pins assigned and no pending full rebuild
+    local any
+    if Map.miniPins then
+      local hi
+      for hi = 1, getn(Map.miniPins) do
+        if Map.miniPins[hi] and Map.miniPins[hi].node then any = true break end
       end
+    end
+    if (not any) and not Map._miniNeedsFull then
+      return
+    end
+    local lx, ly = GetPlayerMapPosition("player")
+    if lx and ly and Map._lastMiniAssignX then
+      local dx = lx - Map._lastMiniAssignX
+      local dy = ly - (Map._lastMiniAssignY or 0)
+      -- Rediscover after ~4% zone movement (pins that were outside the circle)
+      if (dx * dx + dy * dy) > 0.0016 then
+        Map._miniNeedsFull = true
+        Map:UpdateMinimapPins()
+      else
+        Map:RepositionMiniPinsOnly()
+      end
+    else
+      Map:RepositionMiniPinsOnly()
     end
   end)
 

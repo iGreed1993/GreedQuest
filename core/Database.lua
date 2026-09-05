@@ -21,6 +21,10 @@ function DB.UnpackCoords(str)
   local result = {}
   for entry in string.gfind(str, "[^;]+") do
     local _, _, x, y, z, r = string.find(entry, "([^,]+),([^,]+),([^,]+),([^,]+)")
+    if not x then
+      _, _, x, y, z = string.find(entry, "([^,]+),([^,]+),([^,]+)")
+      r = 0
+    end
     if x then
       table.insert(result, {
         tonumber(x), tonumber(y), tonumber(z), tonumber(r)
@@ -127,6 +131,31 @@ function DB:BuildQuestIndexes()
   GQ:Debug("Quest indexes built (" .. getn(self.questIdList) .. " startable quests)")
 end
 
+function DB:ZoneHasStarters(zoneID)
+  local t = GreedQuestDB and GreedQuestDB.mapStarters
+  if not t or not zoneID then return true end -- unknown: scan
+  local list = t[zoneID]
+  return list and getn(list) > 0
+end
+
+function DB:GetStartersForZone(zoneID)
+  local t = GreedQuestDB and GreedQuestDB.mapStarters
+  if not t or not zoneID then return nil end
+  return t[zoneID]
+end
+
+function DB:IsDungeonZone(zoneID)
+  return GreedQuestDB and GreedQuestDB.dungeonZones and GreedQuestDB.dungeonZones[zoneID] and true or false
+end
+
+function DB:GetDungeonEntrances(zoneID)
+  return GreedQuestDB and GreedQuestDB.dungeonEntrances and GreedQuestDB.dungeonEntrances[zoneID]
+end
+
+function DB:QuestKind(qid)
+  return GreedQuestDB and GreedQuestDB.questKind and GreedQuestDB.questKind[qid]
+end
+
 function DB:GetAvailableCandidateIds(playerLevel, levelBand)
   levelBand = levelBand or 5
   local maxLvl = playerLevel + levelBand
@@ -167,6 +196,19 @@ end
 
 function DB:GetQuest(id)
   return GreedQuestDB.quests and GreedQuestDB.quests[id]
+end
+
+function DB:GetAreatrigger(id)
+  local packed = GreedQuestDB.areatriggers and GreedQuestDB.areatriggers[id]
+  if not packed then return nil end
+  if type(packed) == "table" then
+    return self.MakeLazyCoords(packed)
+  end
+  return { coords = self.UnpackCoords(packed) }
+end
+
+function DB:GetItemReqTargets(itemID)
+  return GreedQuestDB.itemReq and GreedQuestDB.itemReq[itemID]
 end
 
 function DB:IsVanillaQuest(id)
