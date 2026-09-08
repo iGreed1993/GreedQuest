@@ -199,16 +199,14 @@ function QD:BuildText(questID, title)
       local money = GetQuestLogRewardMoney and GetQuestLogRewardMoney() or 0
       local numRew = GetNumQuestLogRewards and GetNumQuestLogRewards() or 0
       local numChoice = GetNumQuestLogChoices and GetNumQuestLogChoices() or 0
-      local xp = 0
-      if GQ.QuestXP and GQ.QuestXP.AdjustedXP then
-        xp = GQ.QuestXP:AdjustedXP(qid, logQ.level) or 0
-      elseif GetQuestLogRewardXP then
-        xp = GetQuestLogRewardXP() or 0
+      local xpText
+      if GQ.QuestXP and GQ.QuestXP.FormatXP then
+        xpText = GQ.QuestXP:FormatXP(qid, logQ.level, true)
       end
 
       table.insert(lines, " ")
-      if xp and xp > 0 then
-        table.insert(lines, "|cffffd100Rewards|r  |cff33ffcc" .. tostring(xp) .. " XP|r")
+      if xpText then
+        table.insert(lines, "|cffffd100Rewards|r  " .. xpText)
       else
         table.insert(lines, "|cffffd100Rewards|r")
       end
@@ -234,7 +232,7 @@ function QD:BuildText(questID, title)
           end
         end
       end
-      if (not money or money == 0) and (not numRew or numRew == 0) and (not numChoice or numChoice == 0) and (not xp or xp == 0) then
+      if (not money or money == 0) and (not numRew or numRew == 0) and (not numChoice or numChoice == 0) and not xpText then
         table.insert(lines, "  |cff888888(No item/money rewards listed)|r")
       end
       if prev and prev > 0 then SelectQuestLogEntry(prev) end
@@ -260,6 +258,14 @@ function QD:BuildText(questID, title)
         if piece and piece ~= "" then
           table.insert(lines, "  |cffffffff" .. piece .. "|r")
         end
+      end
+    end
+    if GQ.QuestXP and GQ.QuestXP.FormatXP then
+      local lvl = qdata and (qdata["lvl"] or qdata["min"])
+      local xpText = GQ.QuestXP:FormatXP(questID, lvl, true)
+      if xpText then
+        table.insert(lines, " ")
+        table.insert(lines, "|cffffd100Reward|r  " .. xpText)
       end
     end
   end

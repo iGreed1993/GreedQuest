@@ -398,6 +398,13 @@ function Tracker:ShowQuestTextTooltip(q, owner)
       GameTooltip:AddLine(color .. (obj.text or "") .. "|r")
     end
   end
+  if GQ.QuestXP and GQ.QuestXP.FormatXP then
+    local xpText = GQ.QuestXP:FormatXP(q.questID, q.level, true)
+    if xpText then
+      GameTooltip:AddLine(" ")
+      GameTooltip:AddLine("Reward  " .. xpText, 1, 0.85, 0.2)
+    end
+  end
   GameTooltip:Show()
 end
 

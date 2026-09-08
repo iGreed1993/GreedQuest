@@ -36,14 +36,16 @@ local function RoundXP(xp)
   return 50 * math.floor((xp + 25) / 50)
 end
 
-function QX:BaseXP(qid, questLevel)
-  if GetRewardXP then
-    local ok, v = pcall(GetRewardXP)
-    if ok and type(v) == "number" and v > 0 then return v, true end
-  end
-  if GetQuestLogRewardXP then
-    local ok, v = pcall(GetQuestLogRewardXP)
-    if ok and type(v) == "number" and v > 0 then return v, true end
+function QX:BaseXP(qid, questLevel, skipLive)
+  if not skipLive then
+    if GetRewardXP then
+      local ok, v = pcall(GetRewardXP)
+      if ok and type(v) == "number" and v > 0 then return v, true end
+    end
+    if GetQuestLogRewardXP then
+      local ok, v = pcall(GetQuestLogRewardXP)
+      if ok and type(v) == "number" and v > 0 then return v, true end
+    end
   end
   local db = GreedQuestDB and GreedQuestDB.questXP
   if qid and db and db[qid] and db[qid] > 0 then
@@ -56,14 +58,19 @@ function QX:BaseXP(qid, questLevel)
   return nil, false
 end
 
-function QX:AdjustedXP(qid, questLevel)
-  local base, live = self:BaseXP(qid, questLevel)
+function QX:AdjustedXP(qid, questLevel, skipLive)
+  local base, live = self:BaseXP(qid, questLevel, skipLive)
   if not base then return nil end
   if live then return base, false end
   local pl = UnitLevel and UnitLevel("player") or 1
   if pl >= 60 then return 0, true end
   local factor = GreyFactor(questLevel or pl, pl)
   return RoundXP(base * factor), factor < 1
+end
+
+function QX:FormatXP(qid, questLevel, skipLive)
+  local xp, grey = self:AdjustedXP(qid, questLevel, skipLive)
+  return XPString(xp, grey), xp, grey
 end
 
 local function CurrentQuest()
@@ -176,6 +183,84 @@ local function RestoreRewardLabel()
   HideXPLabel()
 end
 
+local origLogRewardText
+local logXpLabel
+
+local function EnsureLogXPLabel()
+  if logXpLabel then return logXpLabel end
+  local parent = QuestLogDetailScrollChildFrame or QuestLogFrame
+  if not parent then return nil end
+  logXpLabel = parent:CreateFontString("GreedQuestLogXPLabel", "OVERLAY", "GameFontNormal")
+  logXpLabel:SetJustifyH("LEFT")
+  logXpLabel:Hide()
+  return logXpLabel
+end
+
+local function HideLogXPLabel()
+  if logXpLabel then logXpLabel:Hide() end
+end
+
+local function SelectedLogQuest()
+  local idx = GetQuestLogSelection and GetQuestLogSelection() or 0
+  if not idx or idx <= 0 then return nil end
+  local title, level, tag, isHeader = GetQuestLogTitle(idx)
+  if isHeader or not title then return nil end
+  local qid
+  if GQ.Core and GQ.Core.ResolveQuestID then
+    qid = GQ.Core:ResolveQuestID(title)
+  end
+  return qid, title, level
+end
+
+local function LogHasItemOrMoney()
+  local money = (GetQuestLogRewardMoney and GetQuestLogRewardMoney()) or 0
+  local nRew = (GetNumQuestLogRewards and GetNumQuestLogRewards()) or 0
+  local nChoice = (GetNumQuestLogChoices and GetNumQuestLogChoices()) or 0
+  if money and money > 0 then return true end
+  if nRew and nRew > 0 then return true end
+  if nChoice and nChoice > 0 then return true end
+  return false
+end
+
+local function ApplyQuestLogXP()
+  if not QuestLogFrame or not QuestLogFrame:IsShown() then
+    HideLogXPLabel()
+    return
+  end
+  local qid, _, lvl = SelectedLogQuest()
+  -- skipLive: GetQuestLogRewardXP is not on 1.12 and live reward APIs
+  -- belong to the gossip window, not the log.
+  local extra = QX:FormatXP(qid, lvl, true)
+  local fs = QuestLogRewardTitleText
+  if fs and fs.SetText then
+    if not origLogRewardText then
+      origLogRewardText = fs:GetText() or (REWARDS or "Rewards")
+    end
+    if extra and LogHasItemOrMoney() and fs:IsShown() then
+      fs:SetText(origLogRewardText .. "   " .. extra)
+      HideLogXPLabel()
+      return
+    end
+    if origLogRewardText then fs:SetText(origLogRewardText) end
+  end
+  if extra then
+    local lab = EnsureLogXPLabel()
+    if lab then
+      local anchor = QuestLogObjectivesText or QuestLogObjectiveText or QuestLogQuestTitle
+      lab:ClearAllPoints()
+      if anchor then
+        lab:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -8)
+      else
+        lab:SetPoint("TOPLEFT", QuestLogFrame, "TOPLEFT", 20, -160)
+      end
+      lab:SetText(extra)
+      lab:Show()
+    end
+  else
+    HideLogXPLabel()
+  end
+end
+
 function QX:Init()
   if self._inited then return end
   self._inited = true
@@ -185,6 +270,7 @@ function QX:Init()
   f:RegisterEvent("QUEST_COMPLETE")
   f:RegisterEvent("QUEST_FINISHED")
   f:RegisterEvent("QUEST_GREETING")
+  f:RegisterEvent("QUEST_LOG_UPDATE")
   f:SetScript("OnEvent", function()
     if event == "QUEST_DETAIL" or event == "QUEST_COMPLETE" or event == "QUEST_PROGRESS" then
       -- Blizzard hides the Rewards header after our event; wait one frame.
@@ -196,8 +282,40 @@ function QX:Init()
         QX._defer:SetScript("OnUpdate", nil)
         ApplyRewardLabel()
       end)
+    elseif event == "QUEST_LOG_UPDATE" then
+      if not QX._logDefer then QX._logDefer = CreateFrame("Frame") end
+      QX._logDefer.t = 0
+      QX._logDefer:SetScript("OnUpdate", function()
+        QX._logDefer.t = QX._logDefer.t + (arg1 or 0.01)
+        if QX._logDefer.t < 0.05 then return end
+        QX._logDefer:SetScript("OnUpdate", nil)
+        ApplyQuestLogXP()
+      end)
     else
       RestoreRewardLabel()
     end
   end)
+
+  if QuestLogFrame then
+    local prevShow = QuestLogFrame:GetScript("OnShow")
+    QuestLogFrame:SetScript("OnShow", function()
+      if prevShow then prevShow() end
+      ApplyQuestLogXP()
+    end)
+    local prevHide = QuestLogFrame:GetScript("OnHide")
+    QuestLogFrame:SetScript("OnHide", function()
+      if prevHide then prevHide() end
+      HideLogXPLabel()
+      if QuestLogRewardTitleText and origLogRewardText then
+        QuestLogRewardTitleText:SetText(origLogRewardText)
+      end
+    end)
+  end
+  if QuestLog_Update then
+    local orig = QuestLog_Update
+    QuestLog_Update = function()
+      orig()
+      ApplyQuestLogXP()
+    end
+  end
 end
