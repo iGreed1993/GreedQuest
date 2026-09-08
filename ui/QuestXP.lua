@@ -68,11 +68,6 @@ function QX:AdjustedXP(qid, questLevel, skipLive)
   return RoundXP(base * factor), factor < 1
 end
 
-function QX:FormatXP(qid, questLevel, skipLive)
-  local xp, grey = self:AdjustedXP(qid, questLevel, skipLive)
-  return XPString(xp, grey), xp, grey
-end
-
 local function CurrentQuest()
   local title
   if GetTitleText then title = GetTitleText() end
@@ -101,6 +96,11 @@ local function XPString(xp, grey)
     return "|cffaaaaaa" .. tostring(xp) .. " XP|r"
   end
   return "|cff33ffcc" .. tostring(xp) .. " XP|r"
+end
+
+function QX:FormatXP(qid, questLevel, skipLive)
+  local xp, grey = self:AdjustedXP(qid, questLevel, skipLive)
+  return XPString(xp, grey), xp, grey
 end
 
 local function HasItemOrMoneyReward()
