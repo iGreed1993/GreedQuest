@@ -181,6 +181,38 @@ local function PlaceBlackAfter(lab, anchor, text)
   lab:Show()
 end
 
+local function FirstShown(list)
+  local i
+  for i = 1, getn(list) do
+    local fs = list[i]
+    if fs and fs.GetText and (not fs.IsShown or fs:IsShown()) then
+      local t = fs:GetText()
+      if t and t ~= "" then return fs end
+    end
+  end
+  -- Prefer a shown frame even if text is empty
+  for i = 1, getn(list) do
+    local fs = list[i]
+    if fs and (not fs.IsShown or fs:IsShown()) then return fs end
+  end
+  return list[1]
+end
+
+local function PlaceUnderBody(lab, text, candidates)
+  if not lab then return false end
+  local anchor = FirstShown(candidates)
+  if not anchor then return false end
+  lab:ClearAllPoints()
+  lab:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -10)
+  lab:SetTextColor(0, 0, 0)
+  lab:SetText(text)
+  if lab.SetFrameLevel and anchor.GetFrameLevel then
+    lab:SetFrameLevel(anchor:GetFrameLevel() + 2)
+  end
+  lab:Show()
+  return true
+end
+
 local gossipXpLabel
 
 local function HideGossipXP()
@@ -218,9 +250,12 @@ local function ApplyRewardLabel()
   HideGossipXP()
 
   local line = RewardLine(xp)
-  if AppendRewardLine(QuestDescription, line) then return end
-  if AppendRewardLine(QuestObjectiveText, line) then return end
-  AppendRewardLine(QuestProgressText, line)
+  gossipXpLabel = MakeBlackLabel(gossipXpLabel, "GreedQuestXPLabel", QuestFrame)
+  PlaceUnderBody(gossipXpLabel, line, {
+    QuestDescription,
+    QuestObjectiveText,
+    QuestProgressText,
+  })
 end
 
 local function RestoreRewardLabel()
@@ -285,18 +320,19 @@ local function ApplyQuestLogXP()
     return
   end
 
+  local parent = QuestLogDetailScrollChildFrame or QuestLogFrame
   local fs = QuestLogRewardTitleText
+  logXpLabel = MakeBlackLabel(logXpLabel, "GreedQuestLogXPLabel", (fs and fs.GetParent and fs:GetParent()) or parent)
   if hasRew and fs and fs.GetText then
-    HideLogXPLabel()
-    logXpLabel = MakeBlackLabel(logXpLabel, "GreedQuestLogXPLabel", fs:GetParent() or QuestLogDetailScrollChildFrame or QuestLogFrame)
     PlaceBlackAfter(logXpLabel, fs, tostring(xp) .. " XP")
     return
   end
-  HideLogXPLabel()
 
-  local line = RewardLine(xp)
-  if AppendRewardLine(QuestLogQuestDescription, line) then return end
-  AppendRewardLine(QuestLogObjectivesText, line)
+  PlaceUnderBody(logXpLabel, RewardLine(xp), {
+    QuestLogQuestDescription,
+    QuestLogObjectivesText,
+    QuestLogObjectiveText,
+  })
 end
 
 function QX:Init()
