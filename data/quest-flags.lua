@@ -1064,4 +1064,6 @@ GreedQuestDB.questFlags = {
   [80709] = { ["exclusive"]=1 },
   [80729] = { ["exclusive"]=1 },
   [80740] = { ["repeatable"]=1, ["yearly"]=1 },
+  [55100] = { ["disabled"]=1 },
+  [55101] = { ["disabled"]=1 },
 }

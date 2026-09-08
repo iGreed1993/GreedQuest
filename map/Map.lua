@@ -3178,6 +3178,33 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
     end
   end
 
+  -- Scripted / destination pins that have no standing spawn
+  if cfg.showObjectives and not isComplete and GreedQuestDB and GreedQuestDB.questWaypoints then
+    local extra = GreedQuestDB.questWaypoints[qid]
+    if extra then
+      local _, w
+      for _, w in ipairs(extra) do
+        local x, y, zone, typ = w[1], w[2], w[3], w[4] or "Event"
+        if zone and x and y then
+          local tex = self.ICON.event
+          if typ == "Kill" then tex = self.ICON.kill
+          elseif typ == "Talk" then tex = self.ICON.talk
+          elseif typ == "Object" then tex = self.ICON.object
+          end
+          self:AddNode({
+            mapID = zone, x = x, y = y,
+            title = title or ("Quest "..qid),
+            texture = tex,
+            layer = self.LAYER.objective,
+            quest = title, questID = qid,
+            typ = typ, source = "questlog",
+            level = logQuest and logQuest.level,
+          })
+        end
+      end
+    end
+  end
+
   -- Outdoor door pin while a dungeon quest is still in progress
   if cfg.showObjectives and not isComplete then
     self:AddDungeonEntrancePins(qid, qdata, title, logQuest)

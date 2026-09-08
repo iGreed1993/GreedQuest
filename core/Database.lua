@@ -228,8 +228,56 @@ function DB:IsReady()
   return self.ready == true
 end
 
+function DB:ApplyQuestCorrections()
+  local patches = GreedQuestDB.questCorrections
+  local quests = GreedQuestDB.quests
+  if not patches or not quests then return end
+  local qid, patch
+  for qid, patch in pairs(patches) do
+    local q = quests[qid]
+    if not q then
+      quests[qid] = patch
+    else
+      if patch.dropPre then
+        q["pre"] = nil
+      end
+      local k, v
+      for k, v in pairs(patch) do
+        if k ~= "dropPre" then
+          if k == "obj" and type(v) == "table" and type(q["obj"]) == "table" then
+            local ok, ov
+            for ok, ov in pairs(v) do
+              q["obj"][ok] = ov
+            end
+          else
+            q[k] = v
+          end
+        end
+      end
+    end
+  end
+  local fixes = GreedQuestDB.unitCoordFixes
+  if fixes and GreedQuestDB.units then
+    local uid, packed
+    for uid, packed in pairs(fixes) do
+      local u = GreedQuestDB.units[uid]
+      if not u then
+        GreedQuestDB.units[uid] = { _coords = packed }
+      elseif not u._coords and not u.coords then
+        u._coords = packed
+      elseif u._coords then
+        -- keep existing if present, prepend scripted point
+        if not string.find(tostring(u._coords), packed, 1, true) then
+          u._coords = packed .. ";" .. tostring(u._coords)
+        end
+      end
+    end
+  end
+end
+
 function DB:Load()
   self:MergeTurtle()
+  self:ApplyQuestCorrections()
   self:BuildQuestIndexes()
 
   local u, o, i, q = 0, 0, 0, 0
