@@ -1902,7 +1902,7 @@ function Map:ZoneToDisplayedMapCoords(zoneID, x, y)
   end
 
   -- Zone map view only (never while the two-continent / continent map is up)
-  if shownZone and zoneID and tonumber(shownZone) == tonumber(zoneID) then
+  if shownZone and zoneID and self:CanonicalZone(tonumber(shownZone)) == self:CanonicalZone(tonumber(zoneID)) then
     if not self:IsContinentView() then
       return tonumber(x), tonumber(y)
     end
@@ -1976,6 +1976,14 @@ function Map:ForCityEmbedsOnZone(parentZone, fn)
   end
 end
 
+function Map:CanonicalZone(zid)
+  if not zid then return zid end
+  if self.zoneCanon and self.zoneCanon[zid] then
+    return self.zoneCanon[zid]
+  end
+  return zid
+end
+
 function Map:LookupZoneName(name)
   if not name or name == "" then return nil end
   if not self.zoneByName then self:ResolvePlayerZone() end
@@ -2034,15 +2042,22 @@ function Map:GetDisplayedZoneID()
     return self.zoneByName[lower]
   end
   -- exact-ish fuzzy: name contained in DB name or vice versa
+  -- Prefer exact / longer names so "Westfall" does not match "Westfall Lighthouse".
   if self.zoneByName then
     for n, id in pairs(self.zoneByName) do
       if n == lower then return id end
     end
+    local best, bestLen
     for n, id in pairs(self.zoneByName) do
-      if string.find(n, lower, 1, true) or string.find(lower, n, 1, true) then
-        return id
+      if n == lower or string.find(n, lower, 1, true) or string.find(lower, n, 1, true) then
+        local len = string.len(n)
+        if not bestLen or len < bestLen then
+          -- shorter DB name that still matches is the parent zone
+          best, bestLen = id, len
+        end
       end
     end
+    if best then return best end
   end
   -- Unknown custom zone: no ID — caller must not draw player-zone pins
   return nil
@@ -2054,7 +2069,7 @@ function Map:IsNodeOnDisplayedMap(node)
   if not shown then
     return false
   end
-  return node.mapID == shown
+  return self:CanonicalZone(node.mapID) == self:CanonicalZone(shown)
 end
 
 function Map:IsQuestHidden(qid, title)
@@ -3284,11 +3299,41 @@ function Map:ResolvePlayerZone()
 
   if not self.zoneByName then
     self.zoneByName = {}
+    self.zoneCanon = {}
     local zones = GreedQuestDB and GreedQuestDB.zones
+    local wma = GreedQuestDB and GreedQuestDB.worldMapArea
+    local function prefer(old, new)
+      if not old then return true end
+      if not new then return false end
+      local oHas = wma and wma[old]
+      local nHas = wma and wma[new]
+      if nHas and not oHas then return true end
+      if oHas and not nHas then return false end
+      return new < old
+    end
     if zones then
+      local groups = {}
+      local zid, name
       for zid, name in pairs(zones) do
         if type(name) == "string" then
-          self.zoneByName[string.lower(name)] = zid
+          local lower = string.lower(name)
+          lower = string.gsub(lower, "%s+$", "")
+          if prefer(self.zoneByName[lower], zid) then
+            self.zoneByName[lower] = zid
+          end
+          if not groups[lower] then groups[lower] = {} end
+          table.insert(groups[lower], zid)
+        end
+      end
+      local _, list
+      for _, list in pairs(groups) do
+        local canon = list[1]
+        local i
+        for i = 1, getn(list) do
+          if prefer(canon, list[i]) then canon = list[i] end
+        end
+        for i = 1, getn(list) do
+          self.zoneCanon[list[i]] = canon
         end
       end
     end
