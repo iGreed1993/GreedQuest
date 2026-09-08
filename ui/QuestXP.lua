@@ -133,20 +133,52 @@ local function RestorePatched()
   patched = {}
 end
 
+local function AlreadyHasRewardLine(fs)
+  if not fs or not fs.GetText then return false end
+  local cur = fs:GetText() or ""
+  return string.find(cur, "Reward: XP (", 1, true) and true or false
+end
+
 local function AppendRewardLine(fs, line)
   if not Visible(fs) or not line then return false end
+  if AlreadyHasRewardLine(fs) then return true end
   local cur = fs:GetText() or ""
-  if string.find(cur, "Reward: XP (", 1, true) then
-    return true
-  end
   if not patched[fs] then patched[fs] = cur end
-  local base = patched[fs]
-  if base ~= "" then
-    fs:SetText(base .. "\n\n" .. line)
+  if cur ~= "" then
+    fs:SetText(cur .. "\n\n" .. line)
   else
     fs:SetText(line)
   end
   return true
+end
+
+local function MakeBlackLabel(existing, name, parent)
+  if existing then return existing end
+  if not parent then return nil end
+  local lab = parent:CreateFontString(name, "OVERLAY", "QuestFont")
+  if not lab.GetFont or not lab:GetFont() then
+    lab:SetFont("Fonts\\FRIZQT__.TTF", 12)
+  end
+  lab:SetJustifyH("LEFT")
+  lab:SetTextColor(0, 0, 0)
+  return lab
+end
+
+local function PlaceBlackAfter(lab, anchor, text)
+  if not lab or not anchor then return end
+  local w = 60
+  if anchor.GetStringWidth then
+    w = anchor:GetStringWidth() or w
+  end
+  if w < 20 then w = 60 end
+  lab:ClearAllPoints()
+  lab:SetPoint("LEFT", anchor, "LEFT", w + 10, 0)
+  lab:SetTextColor(0, 0, 0)
+  lab:SetText(text)
+  if lab.SetFrameLevel and anchor.GetFrameLevel then
+    lab:SetFrameLevel(anchor:GetFrameLevel() + 2)
+  end
+  lab:Show()
 end
 
 local gossipXpLabel
@@ -155,42 +187,35 @@ local function HideGossipXP()
   if gossipXpLabel then gossipXpLabel:Hide() end
 end
 
-local function PlaceBlackBeside(anchor, text)
-  if not anchor then return end
-  if not gossipXpLabel then
-    local parent = anchor:GetParent() or QuestFrame
-    gossipXpLabel = parent:CreateFontString("GreedQuestXPLabel", "OVERLAY")
-    gossipXpLabel:SetFontObject(QuestFont or GameFontHighlight)
-    gossipXpLabel:SetJustifyH("LEFT")
-  end
-  gossipXpLabel:ClearAllPoints()
-  gossipXpLabel:SetPoint("LEFT", anchor, "RIGHT", 8, 0)
-  gossipXpLabel:SetTextColor(0, 0, 0)
-  gossipXpLabel:SetText(text)
-  gossipXpLabel:Show()
-end
-
 local origRewardText
+local lastGossipKey
 
 local function ApplyRewardLabel()
-  RestorePatched()
-  HideGossipXP()
   local qid, _, lvl = CurrentQuest()
   local xp = QX:AdjustedXP(qid, lvl)
-  if not xp then return end
+  local key = tostring(qid or "") .. ":" .. tostring(xp or 0) .. ":" .. tostring(HasItemOrMoneyReward())
+  if lastGossipKey == key then
+    if gossipXpLabel and gossipXpLabel:IsShown() then return end
+    if AlreadyHasRewardLine(QuestDescription) or AlreadyHasRewardLine(QuestObjectiveText) or AlreadyHasRewardLine(QuestProgressText) then
+      return
+    end
+  end
+  lastGossipKey = key
+  if not xp then
+    HideGossipXP()
+    return
+  end
 
   local fs = QuestRewardTitleText
-  if HasItemOrMoneyReward() and fs and fs.IsShown and fs:IsShown() then
+  if HasItemOrMoneyReward() and fs and fs.GetText then
     if not origRewardText then
       origRewardText = fs:GetText() or (REWARDS or "Rewards")
     end
-    if origRewardText then fs:SetText(origRewardText) end
-    PlaceBlackBeside(fs, tostring(xp) .. " XP")
+    gossipXpLabel = MakeBlackLabel(gossipXpLabel, "GreedQuestXPLabel", fs:GetParent() or QuestFrame)
+    PlaceBlackAfter(gossipXpLabel, fs, tostring(xp) .. " XP")
     return
   end
-  if origRewardText and fs and fs.SetText then
-    fs:SetText(origRewardText)
-  end
+  HideGossipXP()
 
   local line = RewardLine(xp)
   if AppendRewardLine(QuestDescription, line) then return end
@@ -199,6 +224,7 @@ local function ApplyRewardLabel()
 end
 
 local function RestoreRewardLabel()
+  lastGossipKey = nil
   RestorePatched()
   HideGossipXP()
   local fs = QuestRewardTitleText
@@ -209,24 +235,10 @@ end
 
 local origLogRewardText
 local logXpLabel
+local lastLogKey
 
 local function HideLogXPLabel()
   if logXpLabel then logXpLabel:Hide() end
-end
-
-local function PlaceLogBlackBeside(anchor, text)
-  if not anchor then return end
-  if not logXpLabel then
-    local parent = anchor:GetParent() or QuestLogDetailScrollChildFrame or QuestLogFrame
-    logXpLabel = parent:CreateFontString("GreedQuestLogXPLabel", "OVERLAY")
-    logXpLabel:SetFontObject(QuestFont or GameFontHighlight)
-    logXpLabel:SetJustifyH("LEFT")
-  end
-  logXpLabel:ClearAllPoints()
-  logXpLabel:SetPoint("LEFT", anchor, "RIGHT", 8, 0)
-  logXpLabel:SetTextColor(0, 0, 0)
-  logXpLabel:SetText(text)
-  logXpLabel:Show()
 end
 
 local function SelectedLogQuest()
@@ -252,27 +264,35 @@ local function LogHasItemOrMoney()
 end
 
 local function ApplyQuestLogXP()
-  RestorePatched()
-  HideLogXPLabel()
   if not QuestLogFrame or not QuestLogFrame:IsShown() then
     return
   end
   local qid, _, lvl = SelectedLogQuest()
   local xp = QX:AdjustedXP(qid, lvl, true)
-  if not xp then return end
-
-  local fs = QuestLogRewardTitleText
-  if LogHasItemOrMoney() and fs and fs.IsShown and fs:IsShown() then
-    if not origLogRewardText then
-      origLogRewardText = fs:GetText() or (REWARDS or "Rewards")
+  local hasRew = LogHasItemOrMoney()
+  local key = tostring(qid or "") .. ":" .. tostring(xp or 0) .. ":" .. tostring(hasRew)
+  if lastLogKey == key then
+    if hasRew and logXpLabel and logXpLabel.IsShown and logXpLabel:IsShown() then
+      return
     end
-    if origLogRewardText then fs:SetText(origLogRewardText) end
-    PlaceLogBlackBeside(fs, tostring(xp) .. " XP")
+    if (not hasRew) and (AlreadyHasRewardLine(QuestLogQuestDescription) or AlreadyHasRewardLine(QuestLogObjectivesText)) then
+      return
+    end
+  end
+  lastLogKey = key
+  if not xp then
+    HideLogXPLabel()
     return
   end
-  if origLogRewardText and fs and fs.SetText then
-    fs:SetText(origLogRewardText)
+
+  local fs = QuestLogRewardTitleText
+  if hasRew and fs and fs.GetText then
+    HideLogXPLabel()
+    logXpLabel = MakeBlackLabel(logXpLabel, "GreedQuestLogXPLabel", fs:GetParent() or QuestLogDetailScrollChildFrame or QuestLogFrame)
+    PlaceBlackAfter(logXpLabel, fs, tostring(xp) .. " XP")
+    return
   end
+  HideLogXPLabel()
 
   local line = RewardLine(xp)
   if AppendRewardLine(QuestLogQuestDescription, line) then return end
@@ -288,9 +308,9 @@ function QX:Init()
   f:RegisterEvent("QUEST_COMPLETE")
   f:RegisterEvent("QUEST_FINISHED")
   f:RegisterEvent("QUEST_GREETING")
-  f:RegisterEvent("QUEST_LOG_UPDATE")
   f:SetScript("OnEvent", function()
     if event == "QUEST_DETAIL" or event == "QUEST_COMPLETE" or event == "QUEST_PROGRESS" then
+      lastGossipKey = nil
       -- Blizzard hides the Rewards header after our event; wait one frame.
       if not QX._defer then QX._defer = CreateFrame("Frame") end
       QX._defer.t = 0
@@ -299,15 +319,6 @@ function QX:Init()
         if QX._defer.t < 0.05 then return end
         QX._defer:SetScript("OnUpdate", nil)
         ApplyRewardLabel()
-      end)
-    elseif event == "QUEST_LOG_UPDATE" then
-      if not QX._logDefer then QX._logDefer = CreateFrame("Frame") end
-      QX._logDefer.t = 0
-      QX._logDefer:SetScript("OnUpdate", function()
-        QX._logDefer.t = QX._logDefer.t + (arg1 or 0.01)
-        if QX._logDefer.t < 0.05 then return end
-        QX._logDefer:SetScript("OnUpdate", nil)
-        ApplyQuestLogXP()
       end)
     else
       RestoreRewardLabel()
@@ -323,6 +334,7 @@ function QX:Init()
     local prevHide = QuestLogFrame:GetScript("OnHide")
     QuestLogFrame:SetScript("OnHide", function()
       if prevHide then prevHide() end
+      lastLogKey = nil
       HideLogXPLabel()
       RestorePatched()
       if QuestLogRewardTitleText and origLogRewardText then
