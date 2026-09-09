@@ -1208,6 +1208,33 @@ function Map:ShowPinTooltip(pin)
         tip:AddLine(npcName .. " · " .. zoneName, 0.6, 0.6, 0.6)
       end
     end
+  elseif n.typ == "Event" then
+    local line = n.objectiveText
+    if (not line or line == "") and n.questID and GQ.Core and GQ.Core.GetQuestByID then
+      local lq = GQ.Core:GetQuestByID(n.questID)
+      if lq and lq.objectives then
+        local oi
+        for oi = 1, getn(lq.objectives) do
+          local o = lq.objectives[oi]
+          if o and o.text and o.text ~= "" then
+            local ot = string.lower(o.type or "")
+            if ot == "event" then line = o.text break end
+            if not line then
+              local tl = string.lower(o.text)
+              if string.find(tl, "scout", 1, true) or string.find(tl, "explore", 1, true)
+                 or string.find(tl, "discover", 1, true) or string.find(tl, "investigate", 1, true) then
+                line = o.text
+              end
+            end
+          end
+        end
+      end
+    end
+    if line and line ~= "" then
+      tip:AddLine(line, 1, 1, 1)
+    else
+      tip:AddLine("Explore", 0.75, 0.75, 0.75)
+    end
   elseif n.typ then
     tip:AddLine(n.typ, 0.75, 0.75, 0.75)
   end
@@ -1257,7 +1284,7 @@ function Map:ShowPinTooltip(pin)
   end
 
   local objQuests = nil
-  if n.typ == "Kill" or n.typ == "Loot" or n.typ == "Object" then
+  if n.typ == "Kill" or n.typ == "Loot" or n.typ == "Object" or n.typ == "Event" then
     objQuests = self:CollectObjectiveQuests(n)
   end
   if objQuests and getn(objQuests) > 1 then
@@ -1304,7 +1331,7 @@ function Map:ShowPinTooltip(pin)
     local ntyp = string.lower(n.typ or "")
 
     -- Turn-in / available pins should not list kill/loot objectives
-    local showObjs = (ntyp ~= "turn in" and ntyp ~= "available" and n.source ~= "available" and n.source ~= "tracking")
+    local showObjs = (ntyp ~= "turn in" and ntyp ~= "available" and ntyp ~= "event" and n.source ~= "available" and n.source ~= "tracking")
     if showObjs then
       local seen = {}
       local matched = {}
@@ -1367,6 +1394,7 @@ function Map:ShowPinTooltip(pin)
             if ntyp == "kill" and (ot == "monster" or ot == "mob" or ot == "") then ok = true end
             if ntyp == "loot" and (ot == "item" or ot == "") then ok = true end
             if ntyp == "object" and (ot == "object" or ot == "") then ok = true end
+            if ntyp == "event" and (ot == "event" or ot == "") then ok = true end
             if ok then table.insert(typeMatches, obj) end
           end
         end
@@ -3093,6 +3121,28 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
                 quest = title, questID = qid,
                 typ = "Event", source = "questlog",
                 level = logQuest and logQuest.level,
+                objectiveText = (function()
+                  if not logQuest or not logQuest.objectives then return nil end
+                  local oi
+                  for oi = 1, getn(logQuest.objectives) do
+                    local o = logQuest.objectives[oi]
+                    if o and o.text and o.text ~= "" then
+                      local ot = string.lower(o.type or "")
+                      if ot == "event" then return o.text end
+                    end
+                  end
+                  for oi = 1, getn(logQuest.objectives) do
+                    local o = logQuest.objectives[oi]
+                    if o and o.text and o.text ~= "" then
+                      local tl = string.lower(o.text)
+                      if string.find(tl, "scout", 1, true) or string.find(tl, "explore", 1, true)
+                         or string.find(tl, "discover", 1, true) or string.find(tl, "investigate", 1, true) then
+                        return o.text
+                      end
+                    end
+                  end
+                  return logQuest.objectives[1] and logQuest.objectives[1].text
+                end)(),
               })
             end
           end
