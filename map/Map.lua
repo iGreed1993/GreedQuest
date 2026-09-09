@@ -33,7 +33,8 @@ Map.ICON = {
   talk      = "Interface\\GossipFrame\\GossipGossipIcon",
   object    = "Interface\\GossipFrame\\WorkbenchGossipIcon",
   item      = "Interface\\GossipFrame\\PetitionGossipIcon",
-  event     = "Interface\\GossipFrame\\HealerGossipIcon",
+  -- Explore / area / dungeon-door pins — parchment map, not a quest "!"
+  event     = "Interface\\Icons\\INV_Misc_Map_01",
   cluster   = "Interface\\GossipFrame\\AvailableQuestIcon",
   default   = "Interface\\GossipFrame\\AvailableQuestIcon",
 }
@@ -50,6 +51,7 @@ Map.ICON_CHOICES = {
   petition  = "Interface\\GossipFrame\\PetitionGossipIcon",
   workbench = "Interface\\GossipFrame\\WorkbenchGossipIcon",
   healer    = "Interface\\GossipFrame\\HealerGossipIcon",
+  map       = "Interface\\Icons\\INV_Misc_Map_01",
   dot       = "Interface\\AddOns\\GreedQuest\\media\\dot",
 }
 
@@ -69,7 +71,7 @@ function Map:ApplyIconStyle()
     self.ICON.talk      = dot
     self.ICON.object    = dot
     self.ICON.item      = dot
-    self.ICON.event     = dot
+    self.ICON.event     = self.ICON_CHOICES.map
     self.ICON.cluster   = dot
     self.ICON.default   = dot
   else
@@ -92,7 +94,7 @@ function Map:ApplyIconStyle()
     self.ICON.item   = self.ICON.loot
     self.ICON.object = self.ICON_CHOICES[obj] or self.ICON_CHOICES.workbench
     self.ICON.talk   = self.ICON_CHOICES.gossip
-    self.ICON.event  = self.ICON_CHOICES.healer
+    self.ICON.event  = self.ICON_CHOICES.map
     self.ICON.cluster = self.ICON.available
     self.ICON.default = self.ICON.available
   end
@@ -252,6 +254,12 @@ function Map:ResolvePinVisual(typ, grey, node)
     if style == "dots" or (cfg.iconObject == "dot") then
       r = cfg.dotObjR or 0.3; g = cfg.dotObjG or 0.85; b = cfg.dotObjB or 0.95
     end
+  elseif typ == "Event" then
+    tex = self.ICON.event or self.ICON_CHOICES.map
+    r, g, b = 1, 1, 1
+  elseif typ == "Talk" then
+    tex = self.ICON.talk or self.ICON_CHOICES.gossip
+    r, g, b = 1, 1, 1
   elseif typ == "mailbox" or typ == "Mailbox" then
     tex = "Interface\\AddOns\\GreedQuest\\media\\mailbox"
   elseif typ == "flight" then
