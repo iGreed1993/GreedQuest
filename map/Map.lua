@@ -1771,12 +1771,24 @@ function Map:CollectObjectiveQuests(node)
   end
   add(node)
   -- Cluster-off / leftover raw pins on the same mob
-  local raw = node.mapID and self.nodes and self.nodes[node.mapID]
-  if raw and node.entityId then
-    local _, n
-    for _, n in ipairs(raw) do
-      if n ~= node and n.entityId and n.entityId == node.entityId then
-        if n.typ == "Kill" or n.typ == "Loot" then add(n) end
+  local function sameMob(n)
+    if not n or n == node then return false end
+    if n.typ ~= "Kill" and n.typ ~= "Loot" then return false end
+    if node.entityId and n.entityId and tostring(n.entityId) == tostring(node.entityId) then
+      return true
+    end
+    if node.entityName and n.entityName and node.entityName ~= "" and n.entityName == node.entityName then
+      return true
+    end
+    return false
+  end
+  if self.nodes then
+    local mapID, list, _, n
+    for mapID, list in pairs(self.nodes) do
+      if list then
+        for _, n in ipairs(list) do
+          if sameMob(n) then add(n) end
+        end
       end
     end
   end
@@ -1860,6 +1872,18 @@ end
 function Map:ShowPinTooltip(pin)
   local n = pin and pin.node
   if not n then return end
+  -- Item names / drop lists may have unpacked after this pin was first drawn.
+  if (not n.itemName or n.itemName == "") and n.itemID and GQ.Database and GQ.Database.GetItemName then
+    n.itemName = GQ.Database:GetItemName(n.itemID, n.questID)
+  end
+  if n.lootItems then
+    local _, it
+    for _, it in ipairs(n.lootItems) do
+      if it and it.id and (not it.name or it.name == "") and GQ.Database and GQ.Database.GetItemName then
+        it.name = GQ.Database:GetItemName(it.id, n.questID)
+      end
+    end
+  end
 
   local tip = GameTooltip
   if WorldMapFrame and WorldMapFrame:IsVisible() and WorldMapTooltip then
@@ -3239,7 +3263,10 @@ function Map:ContinentAvailableAllowed(mapID, typ)
 end
 
 function Map:UpdateWorldPins()
-  local mapOpen = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
+  local mapOpen = Map._worldMapOpen
+  if not mapOpen then
+    mapOpen = WorldMapFrame and WorldMapFrame:IsVisible()
+  end
   if not mapOpen then return end
   local curCont = 0
   if GetCurrentMapContinent then curCont = GetCurrentMapContinent() or 0 end
@@ -3667,7 +3694,7 @@ function Map:RepositionMiniPinsOnly()
   if self._lastMiniX and self._lastMiniZoom == layout.zoom then
     local dx = layout.pxf - self._lastMiniX
     local dy = layout.pyf - (self._lastMiniY or 0)
-    if (dx * dx + dy * dy) < 0.00000004 then
+    if (dx * dx + dy * dy) < 0.00000025 then
       return
     end
   end
@@ -3720,6 +3747,9 @@ function Map:BuildNodesFromQuestLog()
     Map._clustersDirty = true
     Map._worldPaintKey = nil
     Map._nodeRev = (Map._nodeRev or 0) + 1
+    if GQ.Tooltips and GQ.Tooltips.Invalidate then
+      GQ.Tooltips:Invalidate()
+    end
     Map:UpdateMinimapPins()
     if WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown()) then
       Map:UpdateWorldPins()
@@ -4753,6 +4783,11 @@ end
 
 
 function Map:HideBlizzardQuestPOIs()
+  -- Named frames only. Walking Minimap children every update fights
+  -- the client/DFUI and hitchs the whole screen.
+  local now = GetTime and GetTime() or 0
+  if self._hidePoiAt and (now - self._hidePoiAt) < 2.0 then return end
+  self._hidePoiAt = now
   local function mute(f)
     if not f or not f.Hide then return end
     f:Hide()
@@ -4775,51 +4810,7 @@ function Map:HideBlizzardQuestPOIs()
     mute(getglobal("WorldMapBlob"..i))
     mute(getglobal("MiniMapQuestPOI" .. i))
     mute(getglobal("MinimapQuestPOI" .. i))
-    mute(getglobal("MiniMapPOI" .. i))
   end
-  local function hideQuestTex(frame)
-    if not frame or type(frame) ~= "table" then return end
-    if frame.GetTexture then
-      local ok, tex = pcall(function() return frame:GetTexture() end)
-      if ok and tex and tex ~= "" then
-        tex = string.lower(tostring(tex))
-        if string.find(tex, "questpoi", 1, true)
-           or string.find(tex, "questblob", 1, true)
-           or string.find(tex, "ui-questpoi", 1, true)
-           or string.find(tex, "questobjective", 1, true)
-           or string.find(tex, "poiicons", 1, true)
-           or string.find(tex, "objecticons", 1, true)
-           or string.find(tex, "questnormal", 1, true)
-           or string.find(tex, "questcomplete", 1, true) then
-          local nm = frame.GetName and frame:GetName()
-          if not (nm and string.find(nm, "GQMini", 1, true) == 1) then
-            mute(frame)
-          end
-        end
-      end
-    end
-    if frame.GetChildren then
-      local ok, kids = pcall(function() return { frame:GetChildren() } end)
-      if ok and kids then
-        local k
-        for k = 1, getn(kids) do
-          hideQuestTex(kids[k])
-        end
-      end
-    end
-    if frame.GetRegions then
-      local ok, regs = pcall(function() return { frame:GetRegions() } end)
-      if ok and regs then
-        local r
-        for r = 1, getn(regs) do
-          hideQuestTex(regs[r])
-        end
-      end
-    end
-  end
-  hideQuestTex(WorldMapButton)
-  hideQuestTex(WorldMapDetailFrame)
-  hideQuestTex(Minimap)
 end
 
 function Map:Init()
@@ -4839,26 +4830,30 @@ function Map:Init()
 
   f:SetScript("OnEvent", function()
     if event == "WORLD_MAP_UPDATE" then
-      -- World map only — do NOT rebuild/hide minimap here
-      local open = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
-      if open then
-        Map:ResolvePlayerZone()
+      if Map._worldMapOpen then
         Map:UpdateWorldPins()
         if Map.highlightQuestID or Map.highlightTitle then
           Map:ApplyHighlight()
         end
-      else
-        Map:ClearHighlight()
-        if WorldMapTooltip then WorldMapTooltip:Hide() end
       end
     elseif event == "MINIMAP_UPDATE" then
-      -- Zoom / rotate: move existing pins, do not rebuild textures
       Map._lastMiniZoom = nil
       Map:RepositionMiniPinsOnly()
-    else
+    elseif event == "ZONE_CHANGED_INDOORS" then
+      -- Inn rooms fire this constantly. Zone ID does not change.
+      local prev = Map.playerZoneID
       Map:ResolvePlayerZone()
-      Map._miniNeedsFull = true
-      Map:UpdateMinimapPins()
+      if Map.playerZoneID ~= prev then
+        Map._miniNeedsFull = true
+        Map:UpdateMinimapPins()
+      end
+    else
+      local prev = Map.playerZoneID
+      Map:ResolvePlayerZone()
+      if Map.playerZoneID ~= prev then
+        Map._miniNeedsFull = true
+        Map:UpdateMinimapPins()
+      end
     end
   end)
 
@@ -4867,7 +4862,7 @@ function Map:Init()
   local elapsed = 0
   ticker:SetScript("OnUpdate", function()
     elapsed = elapsed + (arg1 or 0.03)
-    if elapsed < 0.05 then return end
+    if elapsed < 0.10 then return end
     elapsed = 0
     if not Map.playerZoneID then return end
     -- Idle: no pins assigned and no pending full rebuild
@@ -4908,6 +4903,7 @@ function Map:Init()
     local prevShow = WorldMapFrame:GetScript("OnShow")
     WorldMapFrame:SetScript("OnShow", function()
       if prevShow then prevShow() end
+      Map._worldMapOpen = true
       Map._worldPaintDone = false
       Map._worldPaintKey = nil
       Map:ResolvePlayerZone()
@@ -4925,6 +4921,7 @@ function Map:Init()
     local prevHide = WorldMapFrame:GetScript("OnHide")
     WorldMapFrame:SetScript("OnHide", function()
       if prevHide then prevHide() end
+      Map._worldMapOpen = nil
       Map:ClearHighlight()
       if WorldMapTooltip then WorldMapTooltip:Hide() end
       -- Restore zone so GetPlayerMapPosition matches minimap again

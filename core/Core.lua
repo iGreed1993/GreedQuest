@@ -1588,11 +1588,15 @@ function Core:Init()
       Core:InvalidateAvailableCache()
       Core:StartEligibleScan()
       Core:RequestScanQuestLog(0.1)
-    elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_NEW_AREA" or event == "ZONE_CHANGED_INDOORS" then
+    elseif event == "ZONE_CHANGED_NEW_AREA" then
       if GQ.Map and GQ.Map.ResolvePlayerZone then
         GQ.Map:ResolvePlayerZone()
       end
       Core:ScheduleZoneRefresh()
+    elseif event == "ZONE_CHANGED" or event == "ZONE_CHANGED_INDOORS" then
+      if GQ.Map and GQ.Map.ResolvePlayerZone then
+        GQ.Map:ResolvePlayerZone()
+      end
     end
   end)
 

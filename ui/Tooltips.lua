@@ -134,11 +134,21 @@ local function LogCacheKey()
       end
     end
   end
+  -- Pin load unpacks drop tables after the first tooltip pass. Include
+  -- node rev so the cache rebuilds when that data lands.
+  if GQ.Map and GQ.Map._nodeRev then
+    table.insert(parts, "nr" .. tostring(GQ.Map._nodeRev))
+  end
   return table.concat(parts, "|")
 end
 
 -- Build map of lower(unitName) -> list of { quest=q, objectives={obj,...}, dropChances={[text]=pct} }
 -- Each dropper only gets the item objective(s) that unit actually drops.
+function Tooltips:Invalidate()
+  self._dropperCache = nil
+  self._dropperCacheKey = nil
+end
+
 function Tooltips:GetItemDropperMap()
   local key = LogCacheKey()
   if self._dropperCache and self._dropperCacheKey == key then
@@ -180,6 +190,9 @@ function Tooltips:GetItemDropperMap()
       if itemIds then
         for _, itemID in pairs(itemIds) do
           local item = DB:GetItem(itemID)
+          if item and not item.U and item._U and DB.UnpackDropData then
+            item.U = DB.UnpackDropData(item._U)
+          end
           local itemName = DB.GetItemName and DB:GetItemName(itemID, q.questID)
           local matchedObj = ItemObjFor(q, itemID, itemName)
           if item and item.U and matchedObj and not matchedObj.finished then
