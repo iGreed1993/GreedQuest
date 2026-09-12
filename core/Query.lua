@@ -57,9 +57,11 @@ function Query:MarkComplete(qid, stamp)
 end
 
 function Query:ImportExternalHistory()
-  if not pfQuest_history then return 0 end
+  -- Optional: completed-quest history written by another helper's SavedVariables.
+  local hist = pfQuest_history
+  if not hist then return 0 end
   local n = 0
-  for qid, _ in pairs(pfQuest_history) do
+  for qid, _ in pairs(hist) do
     if tonumber(qid) then
       local before = EnsureCompleted()["id:" .. tonumber(qid)]
       self:MarkComplete(tonumber(qid))

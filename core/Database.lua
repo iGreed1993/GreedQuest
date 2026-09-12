@@ -1,9 +1,11 @@
 --[[
   GreedQuest Database
-  - Self-contained quest/unit/object/item tables for Turtle/Octo
-  - Packed coords/drops, lazy unpack
-  - Min-level index for available-quest scans
-  - Data files are listed in the TOC (reliable on 1.12 clients)
+  Packed coords/drops, lazy unpack, min-level index.
+
+  TOC data files -> GreedQuestDB tables:
+    units/objects/items/quests, overlays (turtle coords, corrections),
+    quest-meta (flags/pvp/seasonal/kind), itemreq, map-extra
+    (dungeons/starters/explore), zones, titles, xp, names, waypoints.
 ]]
 
 GreedQuest = GreedQuest or {}
@@ -192,6 +194,59 @@ end
 function DB:GetItem(id)
   local entry = GreedQuestDB.items and GreedQuestDB.items[id]
   if entry then return self.MakeLazyDrops(entry) end
+end
+
+-- Resolve a quest item's display name. Items.lua has no names; use the
+-- client cache, then pair obj.I order with item-type quest-log lines.
+function DB:GetItemName(itemID, qid)
+  itemID = tonumber(itemID)
+  if not itemID then return nil end
+  self._itemNames = self._itemNames or {}
+  if self._itemNames[itemID] and self._itemNames[itemID] ~= "" then
+    return self._itemNames[itemID]
+  end
+  local name
+  if GetItemInfo then
+    name = GetItemInfo(itemID)
+  end
+  if (not name or name == "") and qid then
+    local qdata = self:GetQuest(qid)
+    local ids = qdata and qdata["obj"] and qdata["obj"]["I"]
+    local logQuest = GQ.Core and GQ.Core.GetQuestByID and GQ.Core:GetQuestByID(qid)
+    if ids and logQuest and logQuest.objectives then
+      local want, ii, iid = 0, nil, nil
+      for ii, iid in ipairs(ids) do
+        want = ii
+        if tonumber(iid) == itemID then break end
+      end
+      if want == 0 then
+        for ii, iid in pairs(ids) do
+          if tonumber(iid) == itemID then
+            want = tonumber(ii) or want
+            break
+          end
+        end
+      end
+      local got, oi = 0, nil
+      for oi = 1, getn(logQuest.objectives) do
+        local o = logQuest.objectives[oi]
+        if o and string.lower(o.type or "") == "item" then
+          got = got + 1
+          if got == want and o.text and o.text ~= "" then
+            name = string.gsub(o.text, ":.*$", "")
+            name = string.gsub(name, "%s+%d+/%d+%s*$", "")
+            name = string.gsub(name, "^%s+", "")
+            name = string.gsub(name, "%s+$", "")
+            break
+          end
+        end
+      end
+    end
+  end
+  if name and name ~= "" then
+    self._itemNames[itemID] = name
+  end
+  return name
 end
 
 function DB:GetQuest(id)

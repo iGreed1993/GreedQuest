@@ -37,12 +37,15 @@ function Tracker:QuestMarkerBullet(q, obj)
     return "|cffaaaaaa•|r "
   end
   if q and GQ.Map and GQ.Map.GetQuestMarkerColor then
+    local ot = obj and string.lower(obj.type or "") or ""
+    local isKill = (ot == "monster" or ot == "mob" or ot == "kill")
+    local isLoot = (ot == "item")
     local probe = {
       questID = q.questID,
-      typ = (obj and (obj.type == "monster" or obj.type == "mob" or obj.type == "Kill")) and "Kill" or nil,
-      entityName = obj and ObjectiveMobName(obj.text) or nil,
+      typ = isKill and "Kill" or (isLoot and "Loot" or nil),
+      entityName = isKill and ObjectiveMobName(obj.text) or nil,
+      itemName = isLoot and ObjectiveMobName(obj.text) or nil,
     }
-    if probe.entityName then probe.typ = "Kill" end
     local c = GQ.Map:GetQuestMarkerColor(probe)
     if c then
       r, g, b = c[1] or r, c[2] or g, c[3] or b
@@ -552,6 +555,9 @@ end
 
 function Tracker:Refresh()
   if not self.frame then return end
+  if GQ.Map and GQ.Map.RefreshQuestMarkers then
+    GQ.Map:RefreshQuestMarkers()
+  end
   self:ApplyAppearance()
 
   local cfg = GreedQuestConfig and GreedQuestConfig.tracker or {}

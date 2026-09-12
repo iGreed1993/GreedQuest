@@ -9,7 +9,7 @@ local GQ = GreedQuest
 GQ.Config = GQ.Config or {}
 local Config = GQ.Config
 
-local TAB_NAMES = { "General", "Tracker", "Map", "Icons", "Filters", "Tooltips", "Database" }
+local TAB_NAMES = { "General", "Tracker", "Map", "Filters", "Search" }
 
 local function RefreshAll()
   if GQ.Core and GQ.Core.NotifyFiltersChanged then GQ.Core:NotifyFiltersChanged() end
@@ -46,7 +46,7 @@ local function MakeCheckbox(parent, label, y, path, key, onChange, tipText)
   cb:SetPoint("TOPLEFT", 8, y)
   cb:SetWidth(24)
   cb:SetHeight(24)
-  local text = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  local text = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   text:SetPoint("LEFT", cb, "RIGHT", 4, 0)
   text:SetText(label)
   cb:SetScript("OnClick", function()
@@ -133,7 +133,8 @@ end
 local function Header(parent, text, y)
   local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   fs:SetPoint("TOPLEFT", 8, y)
-  fs:SetText("|cffffd100" .. text .. "|r")
+  fs:SetTextColor(1, 0.85, 0.4)
+  fs:SetText(text)
   return y - 20
 end
 
@@ -211,8 +212,14 @@ local function BuildGeneral(child)
   y = MakeCheckbox(child, "Announce quest progress", y, "general", "announceProgress")
   y = MakeCheckbox(child, "Announce accepted / abandoned / turned in quests", y, "general", "announceAcceptDrop")
   y = y - 6
-  y = Header(child, "Advanced", y)
-  y = MakeCheckbox(child, "Debug messages", y, "general", "debug")
+  y = Header(child, "Tooltips", y)
+  y = MakeCycle(child, "Quest tooltip density", y, "tooltips", "density", {
+    {"Full", "full"},
+    {"Compact", "compact"},
+    {"Off", "off"},
+  }, function() end)
+  y = MakeCheckbox(child, "Show party progress on tooltips", y, "tooltips", "showParty")
+  y = Hint(child, "Hover pins for name/progress. Shift on available quests shows objectives. Alt-click hides.", y)
   return math.abs(y) + 40
 end
 
@@ -226,6 +233,7 @@ local function BuildTracker(child)
   end)
   y = MakeCheckbox(child, "Lock position", y, "tracker", "locked")
   y = MakeCheckbox(child, "Show background", y, "tracker", "showBackground", RefreshTracker)
+  y = MakeCheckbox(child, "Grow upward", y, "tracker", "growUp", RefreshTracker)
   y = MakeSlider(child, "Background opacity", y, "tracker", "alpha", 0, 1.0, 0.05, RefreshTracker)
   y = Hint(child, "Set to 0 for a fully transparent tracker (text only).", y)
   y = MakeSlider(child, "Tracker width", y, "tracker", "width", 160, 420, 10, RefreshTracker)
@@ -264,29 +272,10 @@ local function BuildMap(child)
   y = MakeCheckbox(child, "Show completed quests / turn-ins (?)", y, "map", "showTurnins", RefreshAll)
   y = Hint(child, "Available and turn-in pins are separate. You can hide ! markers and still see ready-to-turn-in ? pins.", y)
   y = MakeCheckbox(child, "Show patrol paths (world map)", y, "map", "showPaths", RefreshMap)
-  y = y - 4
-  y = Header(child, "Clustering", y)
   y = MakeCheckbox(child, "Cluster nearby pins", y, "map", "cluster", RefreshAll,
-    "When OFF, every individual objective pin is drawn with no pooling limit.\n"
-    .. "This can cause heavy map clutter and a noticeable FPS drop in busy zones.\n"
-    .. "Leave clustering ON unless you specifically need exact pin positions.")
+    "Groups nearby objective pins. Off = every spawn is drawn (heavier in busy zones).")
   y = MakeSlider(child, "Cluster radius", y, "map", "clusterRadius", 1.0, 6.0, 0.5, RefreshAll)
   y = y - 4
-  y = Header(child, "Pin size & visibility", y)
-  y = MakeSlider(child, "World map pin size", y, "map", "worldPinSize", 4, 24, 1, RefreshMap)
-  y = MakeSlider(child, "Continent map pin size", y, "map", "continentPinSize", 4, 24, 1, RefreshMap)
-  y = MakeSlider(child, "Zone map pin size", y, "map", "zonePinSize", 4, 28, 1, RefreshMap)
-  y = MakeSlider(child, "Minimap pin size", y, "map", "miniPinSize", 6, 18, 1, RefreshMap)
-  y = MakeSlider(child, "Pin opacity", y, "map", "pinAlpha", 0, 1.0, 0.05, RefreshMap)
-  y = y - 4
-  y = Header(child, "Patrol path lines", y)
-  y = MakeSlider(child, "Path opacity", y, "map", "pathAlpha", 0, 1.0, 0.05, RefreshMap)
-  y = MakeSlider(child, "Path thickness", y, "map", "pathThickness", 1, 4, 1, RefreshMap)
-  return math.abs(y) + 40
-end
-
-local function BuildIcons(child)
-  local y = -8
   y = Header(child, "Icon style", y)
   y = MakeCycle(child, "Pin style", y, "map", "iconStyle", {
     {"Native icons", "native"},
@@ -294,36 +283,25 @@ local function BuildIcons(child)
   }, RefreshAll)
   y = Hint(child, "Dots mode keeps ! and ? icons. Kill / loot / object pins become colored dots.", y)
   y = MakeCheckbox(child, "Color coded quest objectives", y, "map", "colorCodedObjectives", RefreshAll)
-  y = Hint(child, "Colored dots on map icons and tracker lines. Off = no color overlay.", y)
-  y = y - 6
-  y = Header(child, "Native icon set (when not using dots)", y)
-  y = MakeCycle(child, "Available (!)", y, "map", "iconAvailable", {
-    {"Quest !", "quest"},
-    {"Gossip", "gossip"},
-    {"Yellow dot", "dot"},
-  }, RefreshAll)
-  y = MakeCycle(child, "Turn-in (?)", y, "map", "iconTurnin", {
-    {"Quest ?", "quest"},
-    {"Active gossip", "gossip"},
-    {"Gold dot", "dot"},
-  }, RefreshAll)
-  y = MakeCycle(child, "Kill objectives", y, "map", "iconKill", {
-    {"Attack cursor", "attack"},
-    {"Red dot", "dot"},
-    {"Vendor icon", "vendor"},
-  }, RefreshAll)
-  y = MakeCycle(child, "Loot / items", y, "map", "iconLoot", {
-    {"Vendor", "vendor"},
-    {"Green dot", "dot"},
-    {"Petition", "petition"},
-  }, RefreshAll)
-  y = MakeCycle(child, "Objects / interact", y, "map", "iconObject", {
-    {"Workbench", "workbench"},
-    {"Cyan dot", "dot"},
-    {"Gossip", "gossip"},
-  }, RefreshAll)
   y = y - 4
-  y = Hint(child, "Dots mode keeps ! and ? icons. Objectives use colored dots.", y)
+  y = Header(child, "Pin size", y)
+  y = MakeSlider(child, "World map", y, "map", "worldPinSize", 4, 24, 1, RefreshMap)
+  y = MakeSlider(child, "Continent map", y, "map", "continentPinSize", 4, 24, 1, RefreshMap)
+  y = MakeSlider(child, "Zone map", y, "map", "zonePinSize", 4, 28, 1, RefreshMap)
+  y = MakeSlider(child, "Minimap", y, "map", "miniPinSize", 6, 18, 1, RefreshMap)
+  y = MakeSlider(child, "Pin opacity", y, "map", "pinAlpha", 0, 1.0, 0.05, RefreshMap)
+  y = y - 4
+  y = Header(child, "Utility pins", y)
+  y = MakeCheckbox(child, "Flight masters", y, "tracking", "flight", RefreshAll)
+  y = MakeCheckbox(child, "Mailboxes", y, "tracking", "mailbox", RefreshAll)
+  y = MakeCheckbox(child, "Innkeepers", y, "tracking", "innkeeper", RefreshAll)
+  y = MakeCheckbox(child, "Spirit healers", y, "tracking", "spirithealer", RefreshAll)
+  y = MakeCheckbox(child, "Class trainers (your class)", y, "tracking", "classtrainer", RefreshAll)
+  y = MakeCheckbox(child, "Stable masters", y, "tracking", "stablemaster", RefreshAll)
+  y = MakeCheckbox(child, "Rare spawns", y, "tracking", "rares", RefreshAll)
+  y = MakeCheckbox(child, "Chests", y, "tracking", "chests", RefreshAll)
+  y = MakeCheckbox(child, "Rental mounts (Turtle)", y, "tracking", "rental", RefreshAll)
+  y = Hint(child, "Rental pins use published Turtle stable spots. Custom NPCs may be missing from the unit DB.", y)
   return math.abs(y) + 40
 end
 
@@ -351,21 +329,6 @@ local function BuildFilters(child)
     DEFAULT_CHAT_FRAME:AddMessage("|cff33ffccGreedQuest|r: cleared manually hidden quests.")
   end)
   y = y - 30
-  return math.abs(y) + 40
-end
-
-local function BuildTooltips(child)
-  local y = -8
-  y = Header(child, "Tooltip detail", y)
-  y = MakeCycle(child, "Density", y, "tooltips", "density", {
-    {"Full", "full"},
-    {"Compact", "compact"},
-    {"Off", "off"},
-  }, function() end)
-  y = MakeCheckbox(child, "Show party progress on tooltips", y, "tooltips", "showParty")
-  y = y - 6
-  y = Header(child, "Map pin tooltips", y)
-  y = Hint(child, "Hover pins for name/progress. Shift on available shows full objective text. Alt-click hides.", y)
   return math.abs(y) + 40
 end
 
@@ -446,9 +409,9 @@ function Config:Init()
   if self.frame then return end
 
   local f = CreateFrame("Frame", "GreedQuestConfigFrame", UIParent)
-  f:SetWidth(420)
-  f:SetHeight(520)
-  f:SetPoint("CENTER", 0, 0)
+  f:SetWidth(560)
+  f:SetHeight(480)
+  f:SetPoint("CENTER", 0, 20)
   f:SetFrameStrata("DIALOG")
   f:SetMovable(true)
   f:EnableMouse(true)
@@ -461,15 +424,14 @@ function Config:Init()
     tile = true, tileSize = 16, edgeSize = 12,
     insets = { left = 3, right = 3, top = 3, bottom = 3 }
   })
-  f:SetBackdropColor(0, 0, 0, 0.92)
-  f:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+  f:SetBackdropColor(0, 0, 0, 0.94)
+  f:SetBackdropBorderColor(0.55, 0.55, 0.45, 1)
   f:Hide()
   tinsert(UISpecialFrames, "GreedQuestConfigFrame")
 
-  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-  title:SetPoint("TOP", 0, -14)
-  title:SetText("|cff33ffccGreedQuest|r Settings")
-  title:SetFontObject(GameFontNormal)
+  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  title:SetPoint("TOP", 0, -10)
+  title:SetText("GreedQuest Settings")
 
   local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", -5, -5)
@@ -478,7 +440,7 @@ function Config:Init()
   -- Tab strip
   local tabs = {}
   local panes = {}
-  local tabWidth = 54
+  local tabWidth = 88
   local x0 = 16
   for i, name in ipairs(TAB_NAMES) do
     local tab = CreateFrame("Button", "GQConfigTab"..i, f, "UIPanelButtonTemplate")
@@ -497,7 +459,17 @@ function Config:Init()
 
   local function ShowTab(idx)
     for i = 1, getn(panes) do
-      if i == idx then panes[i]:Show() else panes[i]:Hide() end
+      if i == idx then
+        panes[i]:Show()
+        if tabs[i].GetFontString and tabs[i]:GetFontString() then
+          tabs[i]:GetFontString():SetTextColor(1, 0.85, 0.2)
+        end
+      else
+        panes[i]:Hide()
+        if tabs[i].GetFontString and tabs[i]:GetFontString() then
+          tabs[i]:GetFontString():SetTextColor(1, 1, 1)
+        end
+      end
     end
   end
 
@@ -511,9 +483,7 @@ function Config:Init()
     BuildGeneral,
     BuildTracker,
     BuildMap,
-    BuildIcons,
     BuildFilters,
-    BuildTooltips,
     function(child) return BuildDatabase(child, Config) end,
   }
 
@@ -523,7 +493,7 @@ function Config:Init()
     scroll:SetPoint("TOPLEFT", 0, 0)
     scroll:SetPoint("BOTTOMRIGHT", -24, 0)
     local child = CreateFrame("Frame", "GQConfigChild"..i, scroll)
-    child:SetWidth(360)
+    child:SetWidth(500)
     local height = builder(child) or 400
     child:SetHeight(math.max(height, 200))
     scroll:SetScrollChild(child)

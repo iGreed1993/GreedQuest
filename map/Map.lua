@@ -212,7 +212,7 @@ function Map:ResolvePinVisual(typ, grey, node)
     end
   elseif typ == "Turn In" then
     if node and node.talkTo and node.grey then
-      return self.ICON.event or "Interface\GossipFrame\HealerGossipIcon", 1, 1, 1
+      return self.ICON.talk or self.ICON_CHOICES.gossip or "Interface\\GossipFrame\\GossipGossipIcon", 1, 1, 1
     end
     local kind = node and self:GetAvailableKind(node.questID, node.title or node.quest)
     local turnChoice = cfg.iconTurnin or "quest"
@@ -268,6 +268,18 @@ function Map:ResolvePinVisual(typ, grey, node)
     tex = "Interface\\AddOns\\GreedQuest\\media\\innkeeper"
   elseif typ == "repair" then
     tex = "Interface\\AddOns\\GreedQuest\\media\\repair"
+  elseif typ == "spirithealer" then
+    tex = "Interface\\AddOns\\GreedQuest\\media\\spirithealer"
+  elseif typ == "classtrainer" then
+    tex = "Interface\\AddOns\\GreedQuest\\media\\classtrainer"
+  elseif typ == "stablemaster" then
+    tex = "Interface\\AddOns\\GreedQuest\\media\\stablemaster"
+  elseif typ == "rares" then
+    tex = "Interface\\AddOns\\GreedQuest\\media\\rares"
+  elseif typ == "chests" then
+    tex = "Interface\\AddOns\\GreedQuest\\media\\chests"
+  elseif typ == "rental" then
+    tex = "Interface\\AddOns\\GreedQuest\\media\\rental"
   end
 
   if grey then
@@ -368,18 +380,41 @@ function Map:RefreshQuestMarkers()
       self._questMarkerColor[tostring(q.questID)] = palette[bestI]
     end
   end
-  -- Player overrides (ctrl-click) win
-  if GreedQuestCharDB and GreedQuestCharDB.questColorIdx then
+  -- Player overrides (ctrl-click) win — applied again after per-mob split.
+  local function PaintQuestAndKeys(key, col)
+    self._questMarkerColor[key] = col
+    local k
+    for k, _ in pairs(self._questMarkerColor) do
+      if type(k) == "string" and string.find(k, "k:" .. key .. ":", 1, true) == 1 then
+        self._questMarkerColor[k] = col
+      end
+    end
+  end
+  local function ApplyColorOverrides()
+    if not (GreedQuestCharDB and GreedQuestCharDB.questColorIdx) then return end
     local qid, idx
     for qid, idx in pairs(GreedQuestCharDB.questColorIdx) do
       idx = tonumber(idx)
       if idx and palette[idx] then
-        self._questMarkerColor[tostring(qid)] = palette[idx]
+        local col = palette[idx]
+        local key = tostring(qid)
+        PaintQuestAndKeys(key, col)
+        -- Partners that share the exact same kill objective follow.
+        local src = self._killColorGroup and self._killColorGroup[key]
+        local other, osrc
+        if self._killColorGroup then
+          for other, osrc in pairs(self._killColorGroup) do
+            if other ~= key and (osrc == key or osrc == src or other == src) then
+              PaintQuestAndKeys(tostring(other), col)
+            end
+          end
+        end
       end
     end
   end
-  self:MergeSharedObjectiveColors()
   self:AssignKillEntityColors()
+  self:MergeSharedObjectiveColors()
+  ApplyColorOverrides()
 end
 
 function Map:AssignKillEntityColors()
@@ -392,7 +427,7 @@ function Map:AssignKillEntityColors()
   for mapID, list in pairs(self.nodes) do
     if list then
       for _, n in ipairs(list) do
-        if n.typ == "Kill" and n.questID then
+        if (n.typ == "Kill" or n.typ == "Loot") and n.questID then
           local qk = tostring(n.questID)
           local ek = tostring(n.entityId or n.entityName or "")
           if ek ~= "" then
@@ -436,59 +471,348 @@ function Map:AssignKillEntityColors()
       end
     end
   end
+  -- Loot items inherit a mob color only when a single entity drops them.
+  -- Multiple droppers would pick the last mob and desync tracker vs pin dots.
+  local itemSources = {}
+  local mapID2, list2, _, n2
+  for mapID2, list2 in pairs(self.nodes) do
+    if list2 then
+      for _, n2 in ipairs(list2) do
+        if n2.typ == "Loot" and n2.questID then
+          local qk = tostring(n2.questID)
+          local names = {}
+          if n2.itemName and n2.itemName ~= "" then
+            table.insert(names, n2.itemName)
+          end
+          if n2.lootItems then
+            local _, it
+            for _, it in ipairs(n2.lootItems) do
+              if it.name and it.name ~= "" then table.insert(names, it.name) end
+            end
+          end
+          local ni
+          for ni = 1, getn(names) do
+            local ik = qk .. "|" .. string.lower(names[ni])
+            local rec = itemSources[ik]
+            if not rec then
+              rec = { name = names[ni], qk = qk, entity = n2.entityId or n2.entityName, count = 0 }
+              itemSources[ik] = rec
+            end
+            rec.count = rec.count + 1
+            if rec.entity and (n2.entityId or n2.entityName) and rec.entity ~= (n2.entityId or n2.entityName) then
+              rec.count = rec.count + 1
+            end
+          end
+        end
+      end
+    end
+  end
+  local _, rec
+  for _, rec in pairs(itemSources) do
+    if rec.count == 1 then
+      local col = nil
+      if rec.entity then
+        col = self._questMarkerColor["k:" .. rec.qk .. ":" .. tostring(rec.entity)]
+      end
+      if col and rec.name then
+        self._questMarkerColor["k:" .. rec.qk .. ":" .. rec.name] = col
+        self._questMarkerColor["k:" .. rec.qk .. ":" .. string.lower(rec.name)] = col
+      end
+    end
+  end
 end
 
-function Map:MergeSharedObjectiveColors()
-  if not self._questMarkerColor or not self.nodes then return end
-  local byEnt = {}
+function Map:MobNameKey(idOrName)
+  if not idOrName or idOrName == "" then return nil end
+  local s = tostring(idOrName)
+  local nid = tonumber(s)
+  if nid and GreedQuestDB and GreedQuestDB.unitNames and GreedQuestDB.unitNames[nid] then
+    s = GreedQuestDB.unitNames[nid]
+  end
+  s = string.lower(s)
+  s = string.gsub(s, "^%s+", "")
+  s = string.gsub(s, "%s+$", "")
+  if s == "" then return nil end
+  return s
+end
+
+function Map:IndexObjectiveOwnership()
+  self._questKillSet = {}
+  self._questLootSet = {}
+  self._questKillCount = {}
+  self._questLootCount = {}
+  self._questItemCount = {}
+  self._entKillQuests = {}
+  self._entQidList = {}
+  if not self.nodes then return end
+  local function addEntQuest(tbl, ent, qk)
+    if not ent or ent == "" then return end
+    if not tbl[ent] then tbl[ent] = {} end
+    local seen, j = false, nil
+    for j = 1, getn(tbl[ent]) do
+      if tbl[ent][j] == qk then seen = true break end
+    end
+    if not seen then table.insert(tbl[ent], qk) end
+  end
   local mapID, list, _, n
   for mapID, list in pairs(self.nodes) do
     if list then
       for _, n in ipairs(list) do
         local typ = n.typ or ""
         if (typ == "Kill" or typ == "Loot") and n.questID then
-          local ent = tostring(n.entityId or n.entityName or "")
-          if ent ~= "" then
-            if not byEnt[ent] then byEnt[ent] = {} end
-            local qk = tostring(n.questID)
-            local seen = false
-            local j
-            for j = 1, getn(byEnt[ent]) do
-              if byEnt[ent][j] == qk then seen = true break end
+          local qk = tostring(n.questID)
+          local name = self:MobNameKey(n.entityName) or self:MobNameKey(n.entityId)
+          if n.entityId then addEntQuest(self._entQidList, tostring(n.entityId), qk) end
+          if name then addEntQuest(self._entQidList, name, qk) end
+          if typ == "Kill" then
+            if not self._questKillSet[qk] then self._questKillSet[qk] = {} end
+            if name then
+              self._questKillSet[qk][name] = 1
+              addEntQuest(self._entKillQuests, name, qk)
             end
-            if not seen then table.insert(byEnt[ent], qk) end
+            if n.entityId then self._questKillSet[qk][tostring(n.entityId)] = 1 end
+          else
+            if not self._questLootSet[qk] then self._questLootSet[qk] = {} end
+            if name then self._questLootSet[qk][name] = 1 end
+            if n.entityId then self._questLootSet[qk][tostring(n.entityId)] = 1 end
+            if n.itemName and n.itemName ~= "" then
+              if not self._questItemCount[qk] then self._questItemCount[qk] = {} end
+              self._questItemCount[qk][string.lower(n.itemName)] = 1
+            end
+            if n.lootItems then
+              local _, it
+              for _, it in ipairs(n.lootItems) do
+                if it.name and it.name ~= "" then
+                  if not self._questItemCount[qk] then self._questItemCount[qk] = {} end
+                  self._questItemCount[qk][string.lower(it.name)] = 1
+                end
+              end
+            end
           end
         end
       end
     end
   end
-  local ent, qids
-  for ent, qids in pairs(byEnt) do
-    if getn(qids) > 1 then
-      local primary = self._questMarkerColor[qids[1]]
-      local i
-      for i = 2, getn(qids) do
-        if primary then
-          self._questMarkerColor[qids[i]] = primary
+  local qk, set
+  for qk, set in pairs(self._questKillSet) do
+    local c, k = 0, nil
+    for k in pairs(set) do
+      if not tonumber(k) then c = c + 1 end
+    end
+    self._questKillCount[qk] = c
+  end
+  for qk, set in pairs(self._questLootSet) do
+    local c, k = 0, nil
+    for k in pairs(set) do
+      if not tonumber(k) then c = c + 1 end
+    end
+    self._questLootCount[qk] = c
+  end
+  local items = {}
+  for qk, set in pairs(self._questItemCount) do
+    local c, _ = 0, nil
+    for _ in pairs(set) do c = c + 1 end
+    items[qk] = c
+  end
+  self._questItemCount = items
+end
+
+-- Score how "owned" an entity is by a quest. Kill-only quests beat
+-- incidental loot droppers (Killing Fields > Westfall Stew on a golem).
+function Map:EntityQuestScore(qid, ent)
+  if not qid or not ent or ent == "" then return 0 end
+  local qk = tostring(qid)
+  local ek = tostring(ent)
+  local name = self.MobNameKey and self:MobNameKey(ent) or string.lower(ek)
+  local function has(set)
+    if not set or not set[qk] then return false end
+    return set[qk][ek] or set[qk][name] or set[qk][string.lower(ek)]
+  end
+  -- Kill on this mob: this quest exists for that mob (Killing Fields).
+  if has(self._questKillSet) then
+    return 1000
+  end
+  -- Single-item loot whose dropper is this mob (Harvest Golem Mystery rune).
+  -- Multi-ingredient loot (Westfall Stew) stays incidental.
+  if has(self._questLootSet) then
+    local items = self._questItemCount and self._questItemCount[qk] or 0
+    if items <= 1 then return 200 end
+    return 5
+  end
+  return 0
+end
+
+function Map:PinHasMultipleQuests(node)
+  if not node then return false end
+  local seen, count = {}, 0
+  local function add(n)
+    if not n or not n.questID then return end
+    local k = tostring(n.questID)
+    if seen[k] then return end
+    seen[k] = 1
+    count = count + 1
+  end
+  add(node)
+  if node.members then
+    local _, m
+    for _, m in ipairs(node.members) do add(m) end
+  end
+  if node.linked then
+    local _, m
+    for _, m in ipairs(node.linked) do add(m) end
+  end
+  return count > 1
+end
+
+function Map:BestQuestIdForPin(node)
+  if not node then return nil end
+  if not (self._questKillSet or self._questLootSet) then
+    self:IndexObjectiveOwnership()
+  end
+  local qnodes, ents = {}, {}
+  local function consider(n)
+    if not n then return end
+    if n.questID then qnodes[tostring(n.questID)] = n end
+    if n.entityId then ents[tostring(n.entityId)] = 1 end
+    if n.entityName and n.entityName ~= "" then
+      ents[tostring(n.entityName)] = 1
+      ents[string.lower(n.entityName)] = 1
+    end
+  end
+  consider(node)
+  if node.members then
+    local _, m
+    for _, m in ipairs(node.members) do consider(m) end
+  end
+  if node.linked then
+    local _, m
+    for _, m in ipairs(node.linked) do consider(m) end
+  end
+  -- Clustering-off pins are one quest each. Still look up every quest
+  -- that uses this same mob so stew loot cannot keep the dot color.
+  if self._entQidList then
+    local keys, e = {}, nil
+    for e, _ in pairs(ents) do table.insert(keys, e) end
+    local ki
+    for ki = 1, getn(keys) do
+      local list = self._entQidList[keys[ki]]
+      if list then
+        local qi
+        for qi = 1, getn(list) do
+          local qk = list[qi]
+          if not qnodes[qk] then
+            local typ = "Loot"
+            if self._questKillSet and self._questKillSet[qk] and self._questKillSet[qk][keys[ki]] then
+              typ = "Kill"
+            end
+            qnodes[qk] = { questID = qk, typ = typ }
+          end
         end
       end
+    end
+  end
+  local bestQ, bestS = node.questID and tostring(node.questID) or nil, -1
+  local qk, nref
+  for qk, nref in pairs(qnodes) do
+    local score, e = 0, nil
+    for e, _ in pairs(ents) do
+      local s = self:EntityQuestScore(qk, e)
+      if s > score then score = s end
+    end
+    if nref.typ == "Kill" then score = score + 5 end
+    if self._questKillSet and self._questKillSet[qk] then
+      local e
+      for e, _ in pairs(ents) do
+        if self._questKillSet[qk][tostring(e)] or self._questKillSet[qk][string.lower(tostring(e))] then
+          score = score + 500
+          break
+        end
+      end
+    end
+    if score > bestS then
+      bestS = score
+      bestQ = qk
+    end
+  end
+  return bestQ
+end
+
+function Map:MergeSharedObjectiveColors()
+  if not self._questMarkerColor or not self.nodes then return end
+  self:IndexObjectiveOwnership()
+  -- Quests dedicated to the same mob share a color (Killing Fields +
+  -- Harvest Golem Mystery). Incidental stew loot on that mob does not.
+  self._killColorGroup = {}
+  local function dedicated(qk, ent)
+    return self:EntityQuestScore(qk, ent) >= 100
+  end
+  local function unify(qids)
+    if not qids or getn(qids) < 2 then return end
+    local src, si = qids[1], 1
+    for si = 1, getn(qids) do
+      local qk = qids[si]
+      if GreedQuestCharDB and GreedQuestCharDB.questColorIdx and GreedQuestCharDB.questColorIdx[qk] then
+        src = qk
+        break
+      end
+    end
+    local col = self._questMarkerColor[src]
+    local i
+    for i = 1, getn(qids) do
+      if col then self._questMarkerColor[qids[i]] = col end
+      self._killColorGroup[qids[i]] = src
+    end
+  end
+  local seenEnt = {}
+  local ent, qids
+  for ent, qids in pairs(self._entQidList or {}) do
+    if not seenEnt[ent] and qids and getn(qids) > 1 then
+      seenEnt[ent] = 1
+      local primary, i = {}, nil
+      for i = 1, getn(qids) do
+        if dedicated(qids[i], ent) then
+          table.insert(primary, qids[i])
+        end
+      end
+      unify(primary)
     end
   end
 end
 
 function Map:GetQuestMarkerColor(node)
   if not node or not self._questMarkerColor then return nil end
-  if node.questID and (node.typ == "Kill" or node.entityId or node.entityName) then
-    local qk = tostring(node.questID)
-    if node.entityId then
-      local ek = "k:" .. qk .. ":" .. tostring(node.entityId)
-      if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+  if not (self._questKillSet or self._questLootSet) then
+    self:IndexObjectiveOwnership()
+  end
+  -- Pin or tracker line that names a mob: use the dedicated quest's color
+  -- (Killing Fields on a Harvest Watcher, not Westfall Stew).
+  if node.entityId or node.entityName then
+    local best = self:BestQuestIdForPin(node)
+    if best and self._questMarkerColor[tostring(best)] then
+      return self._questMarkerColor[tostring(best)]
     end
-    if node.entityName and node.entityName ~= "" then
-      local ek = "k:" .. qk .. ":" .. node.entityName
-      if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
-      ek = "k:" .. qk .. ":" .. string.lower(node.entityName)
-      if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+  end
+  local typ = node.typ or ""
+  if node.questID and (typ == "Kill" or typ == "Loot") then
+    local qk = tostring(node.questID)
+    if typ == "Loot" and node.itemName and node.itemName ~= "" then
+      local ik = "k:" .. qk .. ":" .. node.itemName
+      if self._questMarkerColor[ik] then return self._questMarkerColor[ik] end
+      ik = "k:" .. qk .. ":" .. string.lower(node.itemName)
+      if self._questMarkerColor[ik] then return self._questMarkerColor[ik] end
+      return self._questMarkerColor[qk]
+    end
+    if typ == "Kill" then
+      if node.entityId then
+        local ek = "k:" .. qk .. ":" .. tostring(node.entityId)
+        if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+      end
+      if node.entityName and node.entityName ~= "" then
+        local ek = "k:" .. qk .. ":" .. node.entityName
+        if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+        ek = "k:" .. qk .. ":" .. string.lower(node.entityName)
+        if self._questMarkerColor[ek] then return self._questMarkerColor[ek] end
+      end
     end
   end
   if not node.questID then return nil end
@@ -509,8 +833,19 @@ function Map:CycleQuestColor(qid, title)
   GreedQuestCharDB.questColorIdx[key] = nxt
   if not self._questMarkerColor then self._questMarkerColor = {} end
   self._questMarkerColor[key] = palette[nxt]
-  if GQ.Tracker and GQ.Tracker.Refresh then GQ.Tracker:Refresh() end
+  -- Keep per-entity keys on the same override so pins follow the tracker.
+  local k
+  for k, _ in pairs(self._questMarkerColor) do
+    if type(k) == "string" and string.find(k, "k:" .. key .. ":", 1, true) == 1 then
+      self._questMarkerColor[k] = palette[nxt]
+    end
+  end
+  self._markerRev = (self._markerRev or 0) + 1
+  self._worldPaintKey = nil
+  self._worldPaintDone = false
   self._miniNeedsFull = true
+  self:RefreshQuestMarkers()
+  if GQ.Tracker and GQ.Tracker.Refresh then GQ.Tracker:Refresh() end
   if self.UpdateWorldPins then self:UpdateWorldPins() end
   if self.UpdateMinimapPins then self:UpdateMinimapPins() end
 end
@@ -542,10 +877,23 @@ function Map:AdjustPinDrawSize(base, node)
 end
 
 -- Colored "•" over the pin; pure text color so the tint always reads.
-
+function Map:EnsurePinDot(pin, fontSize)
+  if not pin then return nil end
+  if pin.numText then return pin.numText end
+  local numText = pin:CreateFontString(nil, "OVERLAY")
+  numText:SetPoint("CENTER", pin, "CENTER", 0, 0)
+  if numText.SetFont then
+    numText:SetFont("Fonts\\FRIZQT__.TTF", fontSize or 6, "OUTLINE")
+  end
+  numText:SetText("")
+  pin.numText = numText
+  return numText
+end
 
 function Map:ApplyQuestMarker(pin, node, pinSize)
-  if not pin or not pin.numText then return end
+  if not pin then return end
+  self:EnsurePinDot(pin, 6)
+  if not pin.numText then return end
   local on = true
   if GreedQuestConfig and GreedQuestConfig.map and GreedQuestConfig.map.colorCodedObjectives == false then
     on = false
@@ -585,11 +933,16 @@ Map.LAYER = {
 
 -- Default cluster radius in map units (0-100 scale)
 Map.CLUSTER_RADIUS = 2.5
+-- When clustering is off but a zone still has more pins than this, fold
+-- them quietly so the world map does not stall. Tooltips stay silent.
+Map.SNEAKY_PIN_LIMIT = 180
 
--- Soft defaults only; pools grow on demand (no hard pin cap)
-local WORLD_POOL_SIZE = 200
-local MINI_POOL_SIZE  = 150
-local LINE_POOL_SIZE  = 200
+-- Soft start size. Pools grow with visible pins; frames stay cheap (1 tex + optional dot).
+local WORLD_POOL_SIZE = 64
+local WORLD_POOL_MAX  = 700
+local MINI_POOL_SIZE  = 40
+local MINI_POOL_MAX   = 180
+local LINE_POOL_SIZE  = 40
 
 -- ============================================================
 -- State
@@ -626,6 +979,138 @@ end
 -- ============================================================
 -- Node management
 -- ============================================================
+
+function Map:RemoveQuestLogNodes(qid)
+  if not qid or not self.nodes then return end
+  local mapID, list
+  for mapID, list in pairs(self.nodes) do
+    local keep = {}
+    local _, node
+    for _, node in ipairs(list) do
+      if not (node.source == "questlog" and node.questID == qid) then
+        table.insert(keep, node)
+      end
+    end
+    self.nodes[mapID] = keep
+  end
+  if self._pinnedLog then self._pinnedLog[qid] = nil end
+  self:MarkClustersDirty()
+end
+
+function Map:ObjectiveLineDone(o)
+  if not o then return false end
+  if o.finished then return true end
+  local t = o.text or ""
+  local _, _, a, b = string.find(t, "(%d+)%s*/%s*(%d+)")
+  a, b = tonumber(a), tonumber(b)
+  if a and b and b > 0 and a >= b then return true end
+  return false
+end
+
+function Map:DesiredLogPins()
+  local desired = {}
+  local log = (GQ.Core and GQ.Core.questLog) or {}
+  local zoneOnly = GreedQuestConfig and GreedQuestConfig.general and GreedQuestConfig.general.currentZoneOnly
+  local _, q
+  for _, q in pairs(log) do
+    local qid = q.questID
+    if (not qid) and q.title and GQ.Core and GQ.Core.ResolveQuestID then
+      qid = GQ.Core:ResolveQuestID(q.title, q)
+      q.questID = qid
+    end
+    if qid then
+      local skip = false
+      if self:IsQuestHidden(qid, q.title) then skip = true end
+      if GQ.Core and GQ.Core.IsTrackedInLog and not GQ.Core:IsTrackedInLog(q) then skip = true end
+      if GQ.Core and GQ.Core.ShouldHideQuest and GQ.Core:ShouldHideQuest(q) then skip = true end
+      if zoneOnly and GQ.Core and GQ.Core.QuestInCurrentZone and not GQ.Core:QuestInCurrentZone(q) then skip = true end
+      if not skip then
+        local doneMask = ""
+        if q.objectives then
+          local oi
+          for oi = 1, getn(q.objectives) do
+            doneMask = doneMask .. (self:ObjectiveLineDone(q.objectives[oi]) and "1" or "0")
+          end
+        end
+        desired[qid] = { complete = q.complete and 1 or 0, title = q.title, doneMask = doneMask }
+      end
+    end
+  end
+  return desired
+end
+
+-- Add/remove only quests that changed. Heavy loot quests stay pinned
+-- after the first accept instead of being rebuilt on every log change.
+function Map:SyncQuestLogNodes()
+  -- First fill is incremental (zone-first) so the minimap is not empty
+  -- while every dropper table unpacks.
+  if not self._pinsPrimed then
+    self:BuildNodesFromQuestLog()
+    return
+  end
+  if not (GQ.Database and GQ.Database:IsReady()) then return end
+  if not GreedQuestConfig or not GreedQuestConfig.map then return end
+  local cfg = GreedQuestConfig.map
+  if not (cfg.showObjectives or cfg.showGivers or cfg.showTurnins) then
+    self:ClearNodes("questlog")
+    self._pinnedLog = {}
+    self:RefreshAvailablePins()
+    return
+  end
+  self._pinnedLog = self._pinnedLog or {}
+  self._pinnedDone = self._pinnedDone or {}
+  local desired = self:DesiredLogPins()
+  local qid, info
+  local removed = false
+  for qid, _ in pairs(self._pinnedLog) do
+    if not desired[qid] then
+      self:RemoveQuestLogNodes(qid)
+      self._pinnedDone[qid] = nil
+      removed = true
+    end
+  end
+  local added, rebuilt = false, false
+  for qid, info in pairs(desired) do
+    local prev = self._pinnedLog[qid]
+    local prevDone = self._pinnedDone[qid]
+    if prev ~= info.complete or prevDone ~= info.doneMask then
+      if prev ~= nil then
+        self:RemoveQuestLogNodes(qid)
+      end
+      local qdata = GQ.Database:GetQuest(qid)
+      if qdata then
+        self:AddQuestNodes(qid, qdata, info.title, info.complete == 1)
+        added = true
+      end
+      self._pinnedLog[qid] = info.complete
+      self._pinnedDone[qid] = info.doneMask
+      rebuilt = true
+    end
+  end
+  if rebuilt or removed then
+    self._nodeRev = (self._nodeRev or 0) + 1
+    self._worldPaintKey = nil
+    if removed or not rebuilt then
+      self:RefreshAvailablePins()
+    else
+      self._miniNeedsFull = true
+      self:DrawAllPins()
+    end
+  end
+end
+
+function Map:RefreshAvailablePins()
+  if not self._pinsPrimed then
+    return
+  end
+  self:ClearNodes("available")
+  self:BuildAvailableNodes()
+  if GQ.Tracking and GQ.Tracking.BuildNodes then
+    GQ.Tracking:BuildNodes()
+  end
+  self._miniNeedsFull = true
+  self:DrawAllPins()
+end
 
 function Map:ClearNodes(filter)
   self:ClearPaths()
@@ -670,6 +1155,24 @@ function Map:AddNode(node)
        and math.abs(existing.x - rx) < 0.15
        and math.abs(existing.y - ry) < 0.15 then
       -- Same spawn used by multiple objectives (e.g. Harpy + Ambusher): keep one pin, merge entities
+      if node.lootItems and existing.lootItems then
+        local _, li
+        for _, li in ipairs(node.lootItems) do
+          local found = false
+          local _, ei
+          for _, ei in ipairs(existing.lootItems) do
+            if ei.id and li.id and ei.id == li.id then found = true break end
+          end
+          if not found then table.insert(existing.lootItems, li) end
+        end
+      elseif node.lootItems and not existing.lootItems then
+        existing.lootItems = node.lootItems
+      end
+      if node.dropChance and (not existing.dropChance or node.dropChance > existing.dropChance) then
+        existing.dropChance = node.dropChance
+        if node.itemName then existing.itemName = node.itemName end
+        if node.itemID then existing.itemID = node.itemID end
+      end
       if node.entityId and existing.entityId and node.entityId ~= existing.entityId then
         if not existing.entityIds then
           existing.entityIds = { existing.entityId }
@@ -684,6 +1187,38 @@ function Map:AddNode(node)
           table.insert(existing.entityIds, node.entityId)
           table.insert(existing.entityNames, node.entityName or "")
         end
+      end
+      return
+    end
+
+    -- Same mob, different quest / type (kill + bandana loot): one pin, kill icon, both on tooltip
+    local et, nt = existing.typ or "", node.typ or ""
+    local mix = (et == "Kill" or et == "Loot") and (nt == "Kill" or nt == "Loot")
+    local sameMob = existing.entityId and node.entityId and existing.entityId == node.entityId
+    if mix and sameMob and math.abs(existing.x - rx) < 0.15 and math.abs(existing.y - ry) < 0.15 then
+      if not existing.linked then existing.linked = {} end
+      table.insert(existing.linked, node)
+      if node.lootItems then
+        if not existing.lootItems then existing.lootItems = {} end
+        local _, li
+        for _, li in ipairs(node.lootItems) do
+          table.insert(existing.lootItems, li)
+        end
+      end
+      if node.itemName and not existing.itemName then
+        existing.itemName = node.itemName
+        existing.itemID = node.itemID
+        existing.dropChance = node.dropChance
+      end
+      if nt == "Kill" and et ~= "Kill" then
+        existing.typ = "Kill"
+        existing.texture = node.texture or existing.texture
+      elseif et ~= "Kill" and nt == "Loot" then
+        -- keep existing
+      end
+      if et == "Kill" or nt == "Kill" then
+        existing.typ = "Kill"
+        if self.ICON and self.ICON.kill then existing.texture = self.ICON.kill end
       end
       return
     end
@@ -746,7 +1281,7 @@ local function PinPriority(n)
   local typ = n.typ or ""
   -- Ready-to-turn-in "?" always wins overlaps vs available "!"
   if typ == "Turn In" and not n.grey then return 80 end
-  if typ == "Kill" or typ == "Loot" or typ == "Object" then return 40 end
+  if typ == "Kill" or typ == "Loot" or typ == "Object" or typ == "Talk" then return 40 end
   if typ == "Turn In" then return 35 end
   if typ == "Available" or typ == "Quest Giver" then return 8 end
   if n.source == "tracking" then return 5 end
@@ -766,6 +1301,51 @@ end
 local function IsAvailablePin(n)
   if not n then return false end
   return n.typ == "Available" or n.typ == "Quest Giver" or n.source == "available"
+end
+
+local function MemberSig(m)
+  if not m then return "" end
+  return tostring(m.questID or m.title or "") .. "|" .. tostring(m.typ or "") .. "|" .. tostring(m.entityId or m.itemID or m.itemName or "")
+end
+
+-- Copy unique quest/entity signatures only. Never ipairs+insert on the same
+-- table (Lua 5.0 "table overflow") and never store the display pin in members.
+local function AbsorbPin(keep, extra)
+  if not keep or not extra or keep == extra then return end
+  if keep.members == extra.members and keep.members then return end
+  if not keep.members then keep.members = {} end
+  keep._memberKeys = keep._memberKeys or {}
+  local function addOne(m)
+    if not m or m == keep then return end
+    local sig = MemberSig(m)
+    if sig == "||" or keep._memberKeys[sig] then return end
+    if getn(keep.members) >= 24 then return end
+    keep._memberKeys[sig] = 1
+    table.insert(keep.members, m)
+  end
+  addOne(extra)
+  if extra.members and extra.members ~= keep.members then
+    local snapshot = {}
+    local i
+    for i = 1, getn(extra.members) do
+      snapshot[i] = extra.members[i]
+    end
+    for i = 1, getn(snapshot) do
+      addOne(snapshot[i])
+    end
+  end
+  if extra.lootItems and extra.lootItems ~= keep.lootItems then
+    if not keep.lootItems then keep.lootItems = {} end
+    local _, li
+    for _, li in ipairs(extra.lootItems) do
+      table.insert(keep.lootItems, li)
+    end
+  end
+  if extra.itemName and not keep.itemName then
+    keep.itemName = extra.itemName
+    keep.itemID = extra.itemID
+    keep.dropChance = extra.dropChance
+  end
 end
 
 function Map:StabilizeDisplayNodes(list, skipGiverCluster)
@@ -799,8 +1379,8 @@ function Map:StabilizeDisplayNodes(list, skipGiverCluster)
         local kAvail = IsAvailablePin(k)
         local nt = n.typ or ""
         local kt = k.typ or ""
-        local nObj = (nt == "Kill" or nt == "Loot" or nt == "Object")
-        local kObj = (kt == "Kill" or kt == "Loot" or kt == "Object")
+        local nObj = (nt == "Kill" or nt == "Loot" or nt == "Object" or nt == "Talk")
+        local kObj = (kt == "Kill" or kt == "Loot" or kt == "Object" or kt == "Talk")
         local nTurn = (nt == "Turn In")
         local kTurn = (kt == "Turn In")
         local sameGiver = false
@@ -837,25 +1417,27 @@ function Map:StabilizeDisplayNodes(list, skipGiverCluster)
             sameMob = true
           end
           if sameMob then
-            -- Same enemy: keep kill over loot, one pin.
-            if kTurn or (kt == "Kill" and nt == "Loot") then
-              drop = true
-              break
-            elseif nt == "Kill" and kt == "Loot" then
-              -- keep incoming kill
-            else
+            -- One tooltip stack for the mob. Only hide the extra pin when
+            -- clustering is on; cluster-off must keep every spawn visible.
+            AbsorbPin(k, n)
+            AbsorbPin(n, k)
+            if nt == "Kill" and kt ~= "Kill" then
+              k.typ = "Kill"
+              k.texture = n.texture or k.texture
+              k.title = n.title or k.title
+              k.questID = n.questID or k.questID
+            end
+            if Map:IsClusteringEnabled() then
               drop = true
               break
             end
-          elseif tostring(n.questID or "") ~= tostring(k.questID or "") then
+          else
+            -- Different enemies (vulture vs goretusk): never delete one.
             if not nudged then
               n.x = (n.x or 0) + 0.9
               n.y = (n.y or 0) - 0.5
               nudged = true
             end
-          else
-            drop = true
-            break
           end
         else
           drop = true
@@ -870,23 +1452,68 @@ function Map:StabilizeDisplayNodes(list, skipGiverCluster)
   return keep
 end
 
+-- When full clustering is off: merge only pins that are the same quest +
+-- same objective stacked on top of each other (same mob / same item).
+function Map:CollapseSameObjectiveOverlaps(list)
+  if not list or getn(list) == 0 then return list end
+  local OVERLAP = 1.1
+  local o2 = OVERLAP * OVERLAP
+  local keep = {}
+  local i, j
+  for i = 1, getn(list) do
+    local n = list[i]
+    local merged = false
+    for j = 1, getn(keep) do
+      local k = keep[j]
+      if (n.questID or 0) == (k.questID or 0)
+         and (n.typ or "") == (k.typ or "")
+         and (n.source or "") == (k.source or "") then
+        local sameObj = false
+        if n.entityId and k.entityId and n.entityId == k.entityId then
+          sameObj = true
+        elseif n.itemID and k.itemID and n.itemID == k.itemID then
+          sameObj = true
+        elseif n.itemName and k.itemName and n.itemName ~= "" and n.itemName == k.itemName then
+          sameObj = true
+        end
+        if sameObj then
+          local dx = (n.x or 0) - (k.x or 0)
+          local dy = (n.y or 0) - (k.y or 0)
+          if dx * dx + dy * dy <= o2 then
+            AbsorbPin(k, n)
+            k.count = (k.count or 1) + 1
+            merged = true
+            break
+          end
+        end
+      end
+    end
+    if not merged then
+      table.insert(keep, n)
+    end
+  end
+  return keep
+end
+
 function Map:ClusterNodesForMap(mapID, skipGiverCluster)
   local raw = self.nodes[mapID]
   if not raw or getn(raw) == 0 then return {} end
 
+  local sneaky = false
+  -- Clustering off: still fold stacked copies of the SAME objective on the
+  -- zone map so we do not blow the pin pool. Minimap uses raw nodes instead.
+  -- If the zone is still overflowing, cluster for real but do not advertise it.
   if not self:IsClusteringEnabled() then
-    local out = {}
-    for _, n in ipairs(raw) do
-      local c = {}
-      for k, v in pairs(n) do c[k] = v end
-      c.x = tonumber(n.x) or n.x
-      c.y = tonumber(n.y) or n.y
-      c.count = 1
-      c.members = { n }
-      c.isCluster = false
-      table.insert(out, c)
+    if getn(raw) <= (self.SNEAKY_PIN_LIMIT or 180) then
+      local folded = self:CollapseSameObjectiveOverlaps(raw)
+      local _, n
+      for _, n in ipairs(folded) do
+        n.count = nil
+        n.isCluster = false
+      end
+      return folded
     end
-    return self:StabilizeDisplayNodes(out, skipGiverCluster)
+    sneaky = true
   end
 
   local radius = self:GetClusterRadius()
@@ -1014,12 +1641,47 @@ function Map:ClusterNodesForMap(mapID, skipGiverCluster)
         itemID = rep.itemID,
         itemName = rep.itemName,
         dropChance = rep.dropChance,
+        lootItems = (function()
+          local acc = {}
+          local seen = {}
+          local function take(list)
+            if not list then return end
+            local _, it
+            for _, it in ipairs(list) do
+              local k = tostring((it and it.id) or (it and it.name) or "")
+              if k ~= "" and not seen[k] then
+                seen[k] = 1
+                table.insert(acc, it)
+              end
+            end
+          end
+          take(rep.lootItems)
+          local mi
+          for mi = 1, getn(members) do
+            take(members[mi].lootItems)
+          end
+          if getn(acc) > 0 then return acc end
+          return rep.lootItems
+        end)(),
+        linked = (function()
+          local acc = {}
+          local mi
+          for mi = 1, getn(members) do
+            table.insert(acc, members[mi])
+            if members[mi].linked then
+              local _, L
+              for _, L in ipairs(members[mi].linked) do table.insert(acc, L) end
+            end
+          end
+          return acc
+        end)(),
         turninID = rep.turninID,
         turninName = rep.turninName,
         turninZone = rep.turninZone,
-        count   = count,
+        count   = sneaky and 1 or count,
         members = members,
-        isCluster = count > 1,
+        isCluster = (not sneaky) and count > 1,
+        overflowCluster = sneaky and count > 1,
       })
     end
   end
@@ -1027,14 +1689,50 @@ function Map:ClusterNodesForMap(mapID, skipGiverCluster)
   return self:StabilizeDisplayNodes(result, skipGiverCluster)
 end
 
-function Map:RebuildClusters()
-  self.clusters = {}
-  self.clustersWide = nil
-  for mapID, _ in pairs(self.nodes) do
-    -- Always keep available / turn-in on true coords (zone, mini, continent).
+function Map:ClusterMap(mapID)
+  if not mapID then return end
+  if self.nodes and self.nodes[mapID] then
     self.clusters[mapID] = self:ClusterNodesForMap(mapID, true)
+  else
+    self.clusters[mapID] = {}
   end
-  -- Cluster list changed — minimap must reassign pins (do not early-return)
+end
+
+-- Fill any map that is on-screen (or the player's zone). Never drop
+-- clusters for other zones — zooming around the world map must just
+-- cluster the newly visible map.
+function Map:RebuildClusters()
+  self.clusters = self.clusters or {}
+  self.clustersWide = nil
+  if self._clustersDirty then
+    self.clusters = {}
+  end
+  local function need(mapID)
+    if not mapID then return end
+    if self.clusters[mapID] and not self._clustersDirty then return end
+    self:ClusterMap(mapID)
+  end
+  need(self.playerZoneID)
+  if self.GetDisplayedZoneID then
+    need(self:GetDisplayedZoneID())
+  end
+  if self.ForCityEmbedsOnZone then
+    self:ForCityEmbedsOnZone(self.playerZoneID, function(cityID)
+      need(cityID)
+    end)
+    local shown = self.GetDisplayedZoneID and self:GetDisplayedZoneID()
+    if shown and shown ~= self.playerZoneID then
+      self:ForCityEmbedsOnZone(shown, function(cityID)
+        need(cityID)
+      end)
+    end
+  end
+  if self.IsContinentView and self:IsContinentView() then
+    local mapID
+    for mapID, _ in pairs(self.nodes or {}) do
+      need(mapID)
+    end
+  end
   self._miniNeedsFull = true
   self._lastMiniX = nil
   self._lastMiniY = nil
@@ -1067,7 +1765,21 @@ function Map:CollectObjectiveQuests(node)
     local _, m
     for _, m in ipairs(node.members) do add(m) end
   end
+  if node.linked then
+    local _, m
+    for _, m in ipairs(node.linked) do add(m) end
+  end
   add(node)
+  -- Cluster-off / leftover raw pins on the same mob
+  local raw = node.mapID and self.nodes and self.nodes[node.mapID]
+  if raw and node.entityId then
+    local _, n
+    for _, n in ipairs(raw) do
+      if n ~= node and n.entityId and n.entityId == node.entityId then
+        if n.typ == "Kill" or n.typ == "Loot" then add(n) end
+      end
+    end
+  end
   return out
 end
 
@@ -1109,6 +1821,40 @@ function Map:CollectNearbyAvailable(node)
     end
   end
   return out
+end
+
+local function CollectNodeLoot(n)
+  local acc, seen = {}, {}
+  local function take(list)
+    if not list then return end
+    local _, it
+    for _, it in ipairs(list) do
+      if it then
+        local key = it.id and ("i:" .. tostring(it.id)) or ("n:" .. string.lower(it.name or ""))
+        if key ~= "i:" and key ~= "n:" and not seen[key] then
+          seen[key] = 1
+          table.insert(acc, it)
+        end
+      end
+    end
+  end
+  local function takeNode(nn)
+    if not nn then return end
+    take(nn.lootItems)
+    if nn.itemID or (nn.itemName and nn.itemName ~= "") then
+      take({ { id = nn.itemID, name = nn.itemName, chance = nn.dropChance } })
+    end
+  end
+  takeNode(n)
+  if n.members then
+    local _, m
+    for _, m in ipairs(n.members) do takeNode(m) end
+  end
+  if n.linked then
+    local _, m
+    for _, m in ipairs(n.linked) do takeNode(m) end
+  end
+  return acc
 end
 
 function Map:ShowPinTooltip(pin)
@@ -1239,52 +1985,85 @@ function Map:ShowPinTooltip(pin)
     tip:AddLine(n.typ, 0.75, 0.75, 0.75)
   end
 
-  -- Loot pins: drop % only while Ctrl is held (always shown on enemy unit tooltips)
-  if n.typ == "Loot" then
-    local function fmtChance(c)
-      if not c or c <= 0 then return nil end
-      if c >= 10 then
-        return string.format("%.0f%%", c)
-      elseif c >= 1 then
-        return string.format("%.1f%%", c)
-      else
-        return string.format("%.2f%%", c)
-      end
-    end
-    local lo, hi = n.dropChance, n.dropChance
-    if n.members then
-      local _, m
-      for _, m in ipairs(n.members) do
-        if m.dropChance and m.dropChance > 0 then
-          if not lo or m.dropChance < lo then lo = m.dropChance end
-          if not hi or m.dropChance > hi then hi = m.dropChance end
-        end
-      end
-    end
-    local a = fmtChance(lo)
-    local b = fmtChance(hi)
-    if n.rareArea then
-      tip:AddLine("Rare drop area  (<1%)", 0.75, 0.7, 0.45)
-    end
-    if a then
-      if IsControlKeyDown() then
-        if b and a ~= b then
-          tip:AddLine("Drop chance  " .. a .. " – " .. b, 0.55, 0.85, 1)
-        else
-          tip:AddLine("Drop chance  " .. a, 0.55, 0.85, 1)
-        end
-      else
-        tip:AddLine("|cffaaaaaaHold Ctrl for drop chance|r", 0.7, 0.7, 0.7)
-      end
+  local function fmtChance(c)
+    if not c or c <= 0 then return nil end
+    if c >= 10 then
+      return string.format("%.0f%%", c)
+    elseif c >= 1 then
+      return string.format("%.1f%%", c)
+    else
+      return string.format("%.2f%%", c)
     end
   end
 
-  if n.count and n.count > 1 and n.typ ~= "Available" and n.source ~= "available" then
+  local function ChanceForText(text)
+    if not text or text == "" then return nil end
+    local tl = string.lower(text)
+    local function fromList(list)
+      if not list then return nil end
+      local _, it
+      for _, it in ipairs(list) do
+        if it.name and it.name ~= "" and string.find(tl, string.lower(it.name), 1, true) then
+          return it.chance
+        end
+      end
+      return nil
+    end
+    local c = fromList(n.lootItems)
+    if c then return c end
+    if n.members then
+      local _, m
+      for _, m in ipairs(n.members) do
+        c = fromList(m.lootItems)
+        if c then return c end
+        if m.itemName and m.itemName ~= "" and string.find(tl, string.lower(m.itemName), 1, true) then
+          return m.dropChance
+        end
+      end
+    end
+    if n.itemName and n.itemName ~= "" and string.find(tl, string.lower(n.itemName), 1, true) then
+      return n.dropChance
+    end
+    return nil
+  end
+
+  local nodeLoot = CollectNodeLoot(n)
+
+  local function ObjLine(obj)
+    local t = (obj and obj.text) or ""
+    if t == "" then return nil, obj and obj.finished end
+    local pct = fmtChance(ChanceForText(t))
+    if pct then t = t .. "  (" .. pct .. ")" end
+    return t, obj and obj.finished
+  end
+
+  local function ObjMatchesThisLoot(obj)
+    if not obj then return false end
+    local raw = obj.text or ""
+    if raw == "" then return false end
+    if ChanceForText(raw) then return true end
+    local tl = string.lower(raw)
+    local _, it
+    for _, it in ipairs(nodeLoot) do
+      if it.name and it.name ~= "" and string.find(tl, string.lower(it.name), 1, true) then
+        return true
+      end
+    end
+    return false
+  end
+
+  -- Loot pins: drop % is listed next to the item this mob actually drops
+  if n.typ == "Loot" and n.rareArea then
+    tip:AddLine("Rare drop area  (<1%)", 0.75, 0.7, 0.45)
+  end
+
+  if n.count and n.count > 1 and n.typ ~= "Available" and n.source ~= "available"
+     and not n.overflowCluster and self:IsClusteringEnabled() then
     tip:AddLine(string.format("%d nearby locations", n.count), 0.5, 0.8, 1)
   end
 
   local objQuests = nil
-  if n.typ == "Kill" or n.typ == "Loot" or n.typ == "Object" or n.typ == "Event" then
+  if n.typ == "Kill" or n.typ == "Loot" or n.typ == "Object" or n.typ == "Event" or n.typ == "Talk" then
     objQuests = self:CollectObjectiveQuests(n)
   end
   if objQuests and getn(objQuests) > 1 then
@@ -1295,15 +2074,39 @@ function Map:ShowPinTooltip(pin)
       local q = e.quest
       if q and q.objectives then
         local _, obj
+        local shown = 0
         for _, obj in ipairs(q.objectives) do
-          local t = obj.text or ""
-          if t ~= "" then
-            if obj.finished then
-              tip:AddLine("  |cff55ff55" .. t .. "|r")
-            else
-              tip:AddLine("  |cffffffff" .. t .. "|r")
+          local raw = obj.text or ""
+          local keep = false
+          local ot = string.lower(obj.type or "")
+          local enode = e.node or n
+          local etyp = (enode and enode.typ) or n.typ or ""
+          if ot == "item" then
+            -- Only the item(s) this exact mob drops, never every loot objective.
+            if ObjMatchesThisLoot(obj) then keep = true end
+          elseif ot == "monster" or ot == "mob" then
+            local en = n.entityName or enode.entityName
+            if en and raw ~= "" and string.find(string.lower(raw), string.lower(en), 1, true) then
+              keep = true
             end
           end
+          if not keep and ChanceForText(raw) then
+            keep = true
+          end
+          if keep then
+            local t, fin = ObjLine(obj)
+            if t and t ~= "" then
+              shown = shown + 1
+              if fin then
+                tip:AddLine("  |cff55ff55" .. t .. "|r")
+              else
+                tip:AddLine("  |cffffffff" .. t .. "|r")
+              end
+            end
+          end
+        end
+        if shown == 0 then
+          tip:AddLine("  |cffaaaaaa(on this mob)|r")
         end
       end
     end
@@ -1335,18 +2138,26 @@ function Map:ShowPinTooltip(pin)
     if showObjs then
       local seen = {}
       local matched = {}
-      -- Build match keys: entity names + item name (loot pins)
+      -- Build match keys. Loot pins match items only — never the mob name.
       local nameList = {}
-      if n.entityNames and type(n.entityNames) == "table" then
-        local _, nm
-        for _, nm in ipairs(n.entityNames) do
-          if nm and nm ~= "" then table.insert(nameList, string.lower(nm)) end
+      if ntyp ~= "loot" then
+        if n.entityNames and type(n.entityNames) == "table" then
+          local _, nm
+          for _, nm in ipairs(n.entityNames) do
+            if nm and nm ~= "" then table.insert(nameList, string.lower(nm)) end
+          end
+        elseif entLower and entLower ~= "" then
+          table.insert(nameList, entLower)
         end
-      elseif entLower and entLower ~= "" then
-        table.insert(nameList, entLower)
       end
       if n.itemName and n.itemName ~= "" then
         table.insert(nameList, string.lower(n.itemName))
+      end
+      local _, itL
+      for _, itL in ipairs(nodeLoot) do
+        if itL.name and itL.name ~= "" then
+          table.insert(nameList, string.lower(itL.name))
+        end
       end
       -- Match any objective whose text contains any name key
       if getn(nameList) > 0 then
@@ -1365,23 +2176,19 @@ function Map:ShowPinTooltip(pin)
           end
         end
       end
-      -- Loot pins: also accept item-type objectives (mob name rarely appears in "Fang: 0/10")
-      if getn(matched) == 0 and ntyp == "loot" then
+      -- Loot pins: only the item(s) this mob actually drops
+      if ntyp == "loot" then
         local itemMatches = {}
         for _, obj in ipairs(q.objectives) do
-          local t = obj.text or ""
-          local ot = string.lower(obj.type or "")
-          if t ~= "" and not seen[t] and (ot == "item" or ot == "") then
-            -- Prefer objectives that look like item progress (contain : or /)
-            table.insert(itemMatches, obj)
+          if ObjMatchesThisLoot(obj) then
+            local t = obj.text or ""
+            if t ~= "" then
+              table.insert(itemMatches, obj)
+              seen[t] = true
+            end
           end
         end
-        if n.itemID and getn(itemMatches) > 1 then
-          -- Multiple item objectives: keep those that mention this pin's entity if possible, else all item objs
-          matched = itemMatches
-        elseif getn(itemMatches) >= 1 then
-          matched = itemMatches
-        end
+        matched = itemMatches
       end
       -- Fallback: exactly one objective of this type on the quest
       if getn(matched) == 0 then
@@ -1392,28 +2199,44 @@ function Map:ShowPinTooltip(pin)
             local ot = string.lower(obj.type or "")
             local ok = false
             if ntyp == "kill" and (ot == "monster" or ot == "mob" or ot == "") then ok = true end
-            if ntyp == "loot" and (ot == "item" or ot == "") then ok = true end
+            if ntyp == "loot" and ot == "item" then ok = true end
             if ntyp == "object" and (ot == "object" or ot == "") then ok = true end
             if ntyp == "event" and (ot == "event" or ot == "") then ok = true end
             if ok then table.insert(typeMatches, obj) end
           end
         end
-        if getn(typeMatches) == 1 then
+        if ntyp == "loot" then
+          if getn(typeMatches) == 1 then
+            matched = typeMatches
+          end
+        elseif getn(typeMatches) == 1 then
           matched = typeMatches
         end
       end
       for _, obj in ipairs(matched) do
-        local t = obj.text or ""
-        if obj.finished then
-          tip:AddLine("  |cff55ff55" .. t .. "|r")
-        else
-          tip:AddLine("  |cffffffff" .. t .. "|r")
+        local t, fin = ObjLine(obj)
+        if t and t ~= "" then
+          if fin then
+            tip:AddLine("  |cff55ff55" .. t .. "|r")
+          else
+            tip:AddLine("  |cffffffff" .. t .. "|r")
+          end
         end
       end
-      if getn(matched) == 0 and getn(nameList) > 0 then
-        local _, nl
-        for _, nl in ipairs(nameList) do
-          tip:AddLine("  |cffffffff" .. nl .. "|r", 0.8, 0.8, 0.8)
+      if getn(matched) == 0 then
+        if ntyp == "loot" and getn(nodeLoot) > 0 then
+          local _, it
+          for _, it in ipairs(nodeLoot) do
+            local label = it.name or "Quest item"
+            local pct = fmtChance(it.chance)
+            if pct then label = label .. "  (" .. pct .. ")" end
+            tip:AddLine("  |cffffffff" .. label .. "|r")
+          end
+        elseif ntyp ~= "loot" and getn(nameList) > 0 then
+          local _, nl
+          for _, nl in ipairs(nameList) do
+            tip:AddLine("  |cffffffff" .. nl .. "|r", 0.8, 0.8, 0.8)
+          end
         end
       end
     end
@@ -1545,63 +2368,68 @@ function Map:OnPinClick(pin)
   end
 end
 
+local function EnsurePinShadow(pin)
+  if pin.backdrop then return pin.backdrop end
+  local backdrop = pin:CreateTexture(nil, "BACKGROUND")
+  backdrop:SetPoint("CENTER", pin, "CENTER", 0, 0)
+  backdrop:SetWidth(18)
+  backdrop:SetHeight(18)
+  backdrop:Hide()
+  pin.backdrop = backdrop
+  return backdrop
+end
+
+local function HoverEnter()
+  Map._hoverPin = this
+  this._gqShift = IsShiftKeyDown() and 1 or 0
+  this._gqCtrl = IsControlKeyDown() and 1 or 0
+  Map:ShowPinTooltip(this)
+end
+
+local function HoverLeave()
+  if Map._hoverPin == this then Map._hoverPin = nil end
+  GameTooltip:Hide()
+  if WorldMapTooltip then WorldMapTooltip:Hide() end
+end
+
+local function HoverClick()
+  Map:OnPinClick(this)
+end
+
+function Map:EnsureHoverWatcher()
+  if self._hoverWatch then return end
+  local f = CreateFrame("Frame")
+  f.t = 0
+  f:SetScript("OnUpdate", function()
+    f.t = f.t + (arg1 or 0.05)
+    if f.t < 0.12 then return end
+    f.t = 0
+    local pin = Map._hoverPin
+    if not pin then return end
+    local s = IsShiftKeyDown() and 1 or 0
+    local c = IsControlKeyDown() and 1 or 0
+    if s ~= pin._gqShift or c ~= pin._gqCtrl then
+      pin._gqShift = s
+      pin._gqCtrl = c
+      Map:ShowPinTooltip(pin)
+    end
+  end)
+  self._hoverWatch = f
+end
+
 local function CreateWorldPin(parent, index)
   local pin = CreateFrame("Frame", "GQWorldPin"..index, parent)
   pin:SetWidth(16)
   pin:SetHeight(16)
-  if pin.SetFrameStrata then pin:SetFrameStrata("HIGH") end
-  pin:SetFrameLevel((parent.GetFrameLevel and parent:GetFrameLevel() or 5) + 50)
+  pin:SetFrameLevel((parent.GetFrameLevel and parent:GetFrameLevel() or 5) + 20)
   pin:EnableMouse(true)
-
-  -- Black icon silhouette slightly larger (depth / shadow)
-  local backdrop = pin:CreateTexture(nil, "BACKGROUND")
-  backdrop:SetPoint("CENTER", pin, "CENTER", 0, 0)
-  backdrop:SetWidth(20)
-  backdrop:SetHeight(20)
-  backdrop:SetTexture(Map.ICON.default)
-  backdrop:SetVertexColor(0, 0, 0, 1)
-  backdrop:Hide()
-  pin.backdrop = backdrop
-
-  -- Main icon
   local tex = pin:CreateTexture(nil, "ARTWORK")
   tex:SetAllPoints(pin)
   tex:SetTexture(Map.ICON.default)
   pin.texture = tex
-
-  -- Quest index number (1-25) overlaid on the icon
-  local numText = pin:CreateFontString(nil, "OVERLAY")
-  numText:SetPoint("CENTER", pin, "CENTER", 0, 0)
-  if numText.SetFont then
-    numText:SetFont("Fonts\\FRIZQT__.TTF", 6, "OUTLINE")
-  end
-  numText:SetText("")
-  numText:SetTextColor(1, 1, 1)
-  numText:Hide()
-  pin.numText = numText
-
-  local badge = pin:CreateTexture(nil, "OVERLAY")
-  badge:SetWidth(8)
-  badge:SetHeight(8)
-  badge:SetPoint("TOPRIGHT", pin, "TOPRIGHT", 2, 2)
-  badge:SetTexture("Interface\\Buttons\\UI-Quickslot-Depress")
-  badge:Hide()
-  pin.badge = badge
-
-  local badgeText = pin:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  badgeText:SetPoint("CENTER", badge, "CENTER", 0, 0)
-  badgeText:SetText("")
-  badgeText:Hide()
-  pin.badgeText = badgeText
-
-  pin:EnableMouse(true)
-  pin:SetScript("OnEnter", function()
-    Map:ShowPinTooltip(this)
-  end)
-  pin:SetScript("OnLeave", function() GameTooltip:Hide() if WorldMapTooltip then WorldMapTooltip:Hide() end end)
-  pin:SetScript("OnMouseUp", function()
-    Map:OnPinClick(this)
-  end)
+  pin:SetScript("OnEnter", HoverEnter)
+  pin:SetScript("OnLeave", HoverLeave)
+  pin:SetScript("OnMouseUp", HoverClick)
   pin:Hide()
   return pin
 end
@@ -1610,7 +2438,8 @@ local function CreateMiniPin(parent, index)
   local pin = CreateFrame("Frame", "GQMiniPin"..index, parent)
   pin:SetWidth(12)
   pin:SetHeight(12)
-  pin:SetFrameLevel((parent.GetFrameLevel and parent:GetFrameLevel() or 5) + 8)
+  if pin.SetFrameStrata then pin:SetFrameStrata("MEDIUM") end
+  pin:SetFrameLevel((parent.GetFrameLevel and parent:GetFrameLevel() or 5) + 20)
 
   local tex = pin:CreateTexture(nil, "OVERLAY")
   tex:SetAllPoints(pin)
@@ -1628,29 +2457,9 @@ local function CreateMiniPin(parent, index)
   pin.numText = numText
 
   pin:EnableMouse(true)
-  pin:SetScript("OnMouseUp", function()
-    Map:OnPinClick(this)
-  end)
-  pin:SetScript("OnEnter", function()
-    this._gqHover = 1
-    this._gqShift = IsShiftKeyDown() and 1 or 0
-    this._gqCtrl = IsControlKeyDown() and 1 or 0
-    Map:ShowPinTooltip(this)
-  end)
-  pin:SetScript("OnUpdate", function()
-    if not this._gqHover then return end
-    local s = IsShiftKeyDown() and 1 or 0
-    local c = IsControlKeyDown() and 1 or 0
-    if s ~= this._gqShift or c ~= this._gqCtrl then
-      this._gqShift = s
-      this._gqCtrl = c
-      Map:ShowPinTooltip(this)
-    end
-  end)
-  pin:SetScript("OnLeave", function()
-    this._gqHover = nil
-    GameTooltip:Hide()
-  end)
+  pin:SetScript("OnMouseUp", HoverClick)
+  pin:SetScript("OnEnter", HoverEnter)
+  pin:SetScript("OnLeave", HoverLeave)
   pin:Hide()
   return pin
 end
@@ -1658,14 +2467,7 @@ end
 function Map:EnsureWorldPool(needed)
   if not WorldMapButton then return end
   needed = needed or WORLD_POOL_SIZE
-  -- Rebuild pool if pin chrome is outdated
-  if getn(self.worldPins) > 0 then
-    local p0 = self.worldPins[1]
-    if p0 and (not p0.backdrop or not p0.numText or p0.outline or p0.centerDot) then
-      for _, p in ipairs(self.worldPins) do p:Hide() end
-      self.worldPins = {}
-    end
-  end
+  if needed > WORLD_POOL_MAX then needed = WORLD_POOL_MAX end
   while getn(self.worldPins) < needed do
     table.insert(self.worldPins, CreateWorldPin(WorldMapButton, getn(self.worldPins) + 1))
   end
@@ -1674,13 +2476,7 @@ end
 function Map:EnsureMiniPool(needed)
   if not Minimap then return end
   needed = needed or MINI_POOL_SIZE
-  if getn(self.miniPins) > 0 then
-    local p0 = self.miniPins[1]
-    if p0 and (p0.centerDot or not p0.numText) then
-      for _, p in ipairs(self.miniPins) do p:Hide() end
-      self.miniPins = {}
-    end
-  end
+  if needed > MINI_POOL_MAX then needed = MINI_POOL_MAX end
   while getn(self.miniPins) < needed do
     table.insert(self.miniPins, CreateMiniPin(Minimap, getn(self.miniPins) + 1))
   end
@@ -2158,7 +2954,7 @@ local MINI_ZOOM_OUTDOOR = {
   [0] = 466 + 2/3,
   [1] = 400,
   [2] = 333 + 1/3,
-  [3] = 266 + 2/6,
+  [3] = 266 + 2/3,
   [4] = 200,
   [5] = 133 + 1/3,
 }
@@ -2195,31 +2991,76 @@ local function MinimapIsIndoor()
   return _indoorCache
 end
 
+function Map:ZoneYardSize(mapID)
+  -- WorldMapArea: { continent, top, bottom, left, right } → X = |left-right|, Y = |top-bottom|
+  local wma = GreedQuestDB and GreedQuestDB.worldMapArea and mapID and GreedQuestDB.worldMapArea[mapID]
+  if type(wma) == "table" then
+    local dy = math.abs((wma[2] or 0) - (wma[3] or 0))
+    local dx = math.abs((wma[4] or 0) - (wma[5] or 0))
+    if dx > 1 and dy > 1 then
+      return dx, dy
+    end
+  end
+  -- minimapSizes in this DB is { north-south, east-west }, not {width, height}
+  local sizes = GreedQuestDB and GreedQuestDB.minimapSizes
+  local dims = mapID and sizes and sizes[mapID]
+  if dims and dims[1] and dims[1] ~= 0 and dims[2] and dims[2] ~= 0 then
+    return dims[2], dims[1]
+  end
+  return 2000, 1330
+end
+
+function Map:GetPlayerZonePosition()
+  -- 1.12 GetPlayerMapPosition follows the WORLD MAP, not the minimap.
+  -- While the map is open those numbers are the browsed map, so the
+  -- minimap must keep using the last reading from when the map was shut.
+  local mapOpen = WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown())
+  if not mapOpen then
+    local pxf, pyf = GetPlayerMapPositionSafe()
+    if pxf and pyf and not (pxf == 0 and pyf == 0) then
+      self._lastGoodPX, self._lastGoodPY = pxf, pyf
+      return pxf, pyf
+    end
+  end
+  if self._lastGoodPX and self._lastGoodPY then
+    return self._lastGoodPX, self._lastGoodPY
+  end
+  return nil
+end
+
 function Map:GetMiniLayout()
-  local pxf, pyf = GetPlayerMapPositionSafe()
+  local pxf, pyf = self:GetPlayerZonePosition()
   if not pxf or not pyf or (pxf == 0 and pyf == 0) then
     return nil
   end
   local mapID = self.playerZoneID
+  -- pfQuest minimap_sizes is { [1]=width, [2]=height } in yards. Use that
+  -- table as-is so pin distance matches the client blips.
   local sizes = GreedQuestDB and GreedQuestDB.minimapSizes
   local dims = mapID and sizes and sizes[mapID]
   local mapWidth, mapHeight
   if dims and dims[1] and dims[1] ~= 0 and dims[2] and dims[2] ~= 0 then
     mapWidth, mapHeight = dims[1], dims[2]
   else
-    mapWidth, mapHeight = 2000, 1330
+    mapWidth, mapHeight = self:ZoneYardSize(mapID)
+  end
+  if not mapWidth or mapWidth < 1 or not mapHeight or mapHeight < 1 then
+    return nil
   end
   local mZoom = 0
   if Minimap and Minimap.GetZoom then
     mZoom = Minimap:GetZoom() or 0
   end
   local indoor = MinimapIsIndoor()
+  if mapID == 1537 or mapID == 1497 or mapID == 2257 then
+    indoor = 0
+  elseif GQ.Database and GQ.Database.IsDungeonZone and mapID and GQ.Database:IsDungeonZone(mapID) then
+    indoor = 0
+  end
   local zoomTbl = (indoor == 0) and MINI_ZOOM_INDOOR or MINI_ZOOM_OUTDOOR
   local mapZoom = zoomTbl[mZoom] or zoomTbl[0]
   local mw = Minimap:GetWidth() or 140
   local mh = Minimap:GetHeight() or 140
-  -- DFUI and similar skins can report a stretched frame. Keep the
-  -- layout on the visible circle or pins run off the gold rim.
   if mw < 80 or mw > 200 then mw = 140 end
   if mh < 80 or mh > 200 then mh = 140 end
   local xScale = mapZoom / mapWidth
@@ -2230,7 +3071,7 @@ function Map:GetMiniLayout()
     yPlayer = pyf * 100,
     xDraw = mw / xScale / 100,
     yDraw = mh / yScale / 100,
-    maxR2 = (radius * 0.98) * (radius * 0.98),
+    maxR2 = (radius * 0.90) * (radius * 0.90),
     pxf = pxf,
     pyf = pyf,
     zoom = mZoom,
@@ -2253,7 +3094,8 @@ function Map:PositionMiniPin(pin, x, y, layout)
     pin:SetParent(Minimap)
     pin._gqMiniParent = Minimap
     pin:EnableMouse(true)
-    pin:SetFrameLevel((Minimap.GetFrameLevel and Minimap:GetFrameLevel() or 2) + 8)
+    if pin.SetFrameStrata then pin:SetFrameStrata("MEDIUM") end
+    pin:SetFrameLevel((Minimap.GetFrameLevel and Minimap:GetFrameLevel() or 2) + 20)
   end
   pin:ClearAllPoints()
   pin:SetPoint("CENTER", Minimap, "CENTER", xPos, -yPos)
@@ -2300,26 +3142,63 @@ function Map:MarkClustersDirty()
 end
 
 function Map:EnsureClusters()
-  local hasNodes = false
-  if self.nodes then
-    for _, list in pairs(self.nodes) do
-      if list and getn(list) > 0 then hasNodes = true break end
+  self.clusters = self.clusters or {}
+  local shown = self.GetDisplayedZoneID and self:GetDisplayedZoneID() or nil
+  local missing = false
+  if self.playerZoneID and not self.clusters[self.playerZoneID] then missing = true end
+  if shown and not self.clusters[shown] then missing = true end
+  if self.IsContinentView and self:IsContinentView() then
+    local mapID, list
+    for mapID, list in pairs(self.nodes or {}) do
+      if list and getn(list) > 0 and not self.clusters[mapID] then
+        missing = true
+        break
+      end
     end
   end
-  local clusterCount = 0
-  if self.clusters then
-    for _, list in pairs(self.clusters) do
-      if list then clusterCount = clusterCount + getn(list) end
-    end
-  end
-  if self._clustersDirty or (hasNodes and clusterCount == 0) then
+  if self._clustersDirty or missing then
     self:RebuildClusters()
     self._clustersDirty = false
   end
 end
 
 -- Draw both layers from current node data (does NOT clear node data)
+function Map:HideAvailableUnderTurnins()
+  if not self.nodes then return end
+  local covered = {}
+  local mapID, list, _, n
+  for mapID, list in pairs(self.nodes) do
+    if list then
+      for _, n in ipairs(list) do
+        if n.typ == "Turn In" and not n.grey then
+          if n.entityId then covered["id:" .. tostring(n.entityId)] = 1 end
+          if n.turninID then covered["id:" .. tostring(n.turninID)] = 1 end
+          if n.entityName and n.entityName ~= "" then
+            covered["n:" .. string.lower(n.entityName)] = 1
+          end
+        end
+      end
+    end
+  end
+  for mapID, list in pairs(self.nodes) do
+    if list then
+      local keep, i = {}, nil
+      for i = 1, getn(list) do
+        n = list[i]
+        local hide = false
+        if n.typ == "Available" or n.typ == "Quest Giver" then
+          if n.entityId and covered["id:" .. tostring(n.entityId)] then hide = true end
+          if n.entityName and n.entityName ~= "" and covered["n:" .. string.lower(n.entityName)] then hide = true end
+        end
+        if not hide then table.insert(keep, n) end
+      end
+      self.nodes[mapID] = keep
+    end
+  end
+end
+
 function Map:DrawAllPins()
+  self:HideAvailableUnderTurnins()
   self:EnsureClusters()
   self:UpdateWorldPins()
   self:UpdateMinimapPins()
@@ -2369,6 +3248,7 @@ function Map:UpdateWorldPins()
   local paintKey = tostring(curCont) .. ":" .. tostring(curZone)
     .. ":" .. tostring(self:GetDisplayedZoneID() or "?")
     .. ":" .. tostring(self._nodeRev or 0)
+    .. ":" .. tostring(self._markerRev or 0)
     .. ":" .. tostring((GreedQuestConfig.map and GreedQuestConfig.map.iconStyle) or "")
   if self._worldPaintKey == paintKey and self._worldPaintDone then
     return
@@ -2424,49 +3304,13 @@ function Map:UpdateWorldPins()
 
   local function paint(node, px, py)
     if worldIndex > getn(self.worldPins) then
-      self:EnsureWorldPool(worldIndex + 32)
+      self:EnsureWorldPool(worldIndex)
     end
+    if worldIndex > getn(self.worldPins) then return end
     local pin = self.worldPins[worldIndex]
     if not pin then return end
     pin.node = node
     pin:EnableMouse(true)
-    if pin.SetFrameStrata then pin:SetFrameStrata("HIGH") end
-    if pin.SetFrameLevel then
-      local parent = pin:GetParent()
-      local boost = 40
-      if node.typ == "Turn In" then
-        boost = 58
-      elseif self:IsSingleObjectiveQuest(node) then
-        boost = 52
-      elseif node.typ == "Available" or node.typ == "Quest Giver" then
-        boost = 32
-      end
-      pin:SetFrameLevel((parent and parent.GetFrameLevel and parent:GetFrameLevel() or 10) + boost)
-    end
-    pin:SetScript("OnEnter", function()
-      this._gqHover = 1
-      this._gqShift = IsShiftKeyDown() and 1 or 0
-      this._gqCtrl = IsControlKeyDown() and 1 or 0
-      Map:ShowPinTooltip(this)
-    end)
-    pin:SetScript("OnUpdate", function()
-      if not this._gqHover then return end
-      local s = IsShiftKeyDown() and 1 or 0
-      local c = IsControlKeyDown() and 1 or 0
-      if s ~= this._gqShift or c ~= this._gqCtrl then
-        this._gqShift = s
-        this._gqCtrl = c
-        Map:ShowPinTooltip(this)
-      end
-    end)
-    pin:SetScript("OnLeave", function()
-      this._gqHover = nil
-      GameTooltip:Hide()
-      if WorldMapTooltip then WorldMapTooltip:Hide() end
-    end)
-    pin:SetScript("OnMouseUp", function()
-      Map:OnPinClick(this)
-    end)
     if pin.texture then
       local tex, r, g, b = self:ResolvePinVisual(node.typ, node.grey, node)
       if node.source == "tracking" and node.texture then
@@ -2594,6 +3438,10 @@ end
 -- Only recalculates when player pos / zoom actually changed (anti-jitter)
 function Map:UpdateMinimapPins()
   self:EnsureMiniPool()
+  if self.HideBlizzardQuestPOIs then self:HideBlizzardQuestPOIs() end
+  if not self.playerZoneID and self.ResolvePlayerZone then
+    self:ResolvePlayerZone()
+  end
   self:EnsureClusters()
   self:RefreshQuestMarkers()
 
@@ -2616,8 +3464,28 @@ function Map:UpdateMinimapPins()
   end
   self._miniNeedsFull = false
 
-  local list = self.clusters[playerZoneID]
-  if not list then
+  -- Raw spawn points from every DB id that is the same zone (Westfall
+  -- has more than one map ID). Clustering never applies here.
+  local candidates = {}
+  if self.nodes then
+    local canon = self.CanonicalZone and self:CanonicalZone(playerZoneID) or playerZoneID
+    local mapID, list
+    for mapID, list in pairs(self.nodes) do
+      if list and getn(list) > 0 then
+        local same = (mapID == playerZoneID)
+        if not same and self.CanonicalZone then
+          same = self:CanonicalZone(mapID) == canon
+        end
+        if same then
+          local _, node
+          for _, node in ipairs(list) do
+            table.insert(candidates, node)
+          end
+        end
+      end
+    end
+  end
+  if getn(candidates) == 0 then
     local hi
     for hi = 1, getn(self.miniPins) do
       local p = self.miniPins[hi]
@@ -2636,14 +3504,45 @@ function Map:UpdateMinimapPins()
     self._lastMiniAssignY = layout.pyf
   end
   local miniIndex = 1
-  for _, node in ipairs(list) do
+  -- Closest first so a field of far droppers cannot consume the pool
+  -- before the golems standing next to the player get a pin.
+  if layout then
+    local function miniPrio(n)
+      local t = n and n.typ or ""
+      if t == "Turn In" then return 0 end
+      if t == "Available" or t == "Quest Giver" then return 1 end
+      return 2
+    end
+    table.sort(candidates, function(a, b)
+      local pa, pb = miniPrio(a), miniPrio(b)
+      if pa ~= pb then return pa < pb end
+      local ax = (tonumber(a.x) or 0) - layout.xPlayer
+      local ay = (tonumber(a.y) or 0) - layout.yPlayer
+      local bx = (tonumber(b.x) or 0) - layout.xPlayer
+      local by = (tonumber(b.y) or 0) - layout.yPlayer
+      return (ax * ax + ay * ay) < (bx * bx + by * by)
+    end)
+  end
+  local ci
+  for ci = 1, getn(candidates) do
+    if miniIndex > MINI_POOL_MAX then break end
+    local node = candidates[ci]
+    local nx = tonumber(node.x) or node.x
+    local ny = tonumber(node.y) or node.y
+    -- Reject off-circle nodes before taking a pool slot.
+    if layout then
+      local xPos = ((nx or 0) - layout.xPlayer) * layout.xDraw
+      local yPos = ((ny or 0) - layout.yPlayer) * layout.yDraw
+      if (xPos * xPos + yPos * yPos) > layout.maxR2 then
+        node = nil
+      end
+    end
+    if node then
     if miniIndex > getn(self.miniPins) then
-      self:EnsureMiniPool(miniIndex + 32)
+      self:EnsureMiniPool(miniIndex)
     end
     local pin = self.miniPins[miniIndex]
     if pin then
-      local nx = tonumber(node.x) or node.x
-      local ny = tonumber(node.y) or node.y
       pin.node = node
       pin:EnableMouse(true)
       if pin.texture then
@@ -2675,6 +3574,9 @@ function Map:UpdateMinimapPins()
         end
       end
       size = self:AdjustPinDrawSize(size, node)
+      if node.typ == "Turn In" then
+        size = math.max(size, (miniSize or 10) + 4)
+      end
       if pin.texture and pin.texture.GetTexture then
         local tp = tostring(pin.texture:GetTexture() or "")
         if string.find(string.lower(tp), "media\\dot") or string.find(string.lower(tp), "media/dot") then
@@ -2690,19 +3592,29 @@ function Map:UpdateMinimapPins()
       self:PositionMiniPin(pin, nx, ny, layout)
       miniIndex = miniIndex + 1
     end
+    end -- node on circle
   end
   if self.ForCityEmbedsOnZone then
     self:ForCityEmbedsOnZone(playerZoneID, function(cityID, embed)
-      local clist = self.clusters[cityID]
+      local clist = (self.nodes and self.nodes[cityID]) or self.clusters[cityID]
       if not clist then return end
       local _, node
       for _, node in ipairs(clist) do
+        if miniIndex > MINI_POOL_MAX then return end
+        local px, py = self:EmbedCityPoint(embed, node.x, node.y)
+        if layout then
+          local xPos = ((px or 0) - layout.xPlayer) * layout.xDraw
+          local yPos = ((py or 0) - layout.yPlayer) * layout.yDraw
+          if (xPos * xPos + yPos * yPos) > layout.maxR2 then
+            px = nil
+          end
+        end
+        if px then
         if miniIndex > getn(self.miniPins) then
-          self:EnsureMiniPool(miniIndex + 32)
+          self:EnsureMiniPool(miniIndex)
         end
         local pin = self.miniPins[miniIndex]
         if pin then
-          local px, py = self:EmbedCityPoint(embed, node.x, node.y)
           local copy = {}
           local k, v
           for k, v in pairs(node) do copy[k] = v end
@@ -2732,6 +3644,7 @@ function Map:UpdateMinimapPins()
           self:PositionMiniPin(pin, px, py, layout)
           miniIndex = miniIndex + 1
         end
+        end -- px on circle
       end
     end)
   end
@@ -2773,61 +3686,103 @@ function Map:RepositionMiniPinsOnly()
 end
 
 function Map:BuildNodesFromQuestLog()
+  self._pinsPrimed = true
   self._nodeRev = (self._nodeRev or 0) + 1
   self._buildGen = (self._buildGen or 0) + 1
   local gen = self._buildGen
   self._worldPaintKey = nil
+  self._pinnedLog = {}
   self:ClearNodes("questlog")
   self:ClearNodes("available")
 
   if not (GQ.Database and GQ.Database:IsReady()) then return end
   if not GreedQuestConfig or not GreedQuestConfig.map then return end
-  local cfg = GreedQuestConfig.map
+  if self.ResolvePlayerZone then self:ResolvePlayerZone() end
 
-  local DB = GQ.Database
-  if not DB then return end
-
-  local log = (GQ.Core and GQ.Core.questLog) or {}
-
-  local zoneOnly = GreedQuestConfig and GreedQuestConfig.general and GreedQuestConfig.general.currentZoneOnly
-
-  local pinned = 0
-  for _, q in pairs(log) do
-    local qid = q.questID
-    if (not qid) and q.title and GQ.Core and GQ.Core.ResolveQuestID then
-      qid = GQ.Core:ResolveQuestID(q.title)
-      q.questID = qid
+  local desired = self:DesiredLogPins()
+  local jobs = {}
+  local qid, info
+  for qid, info in pairs(desired) do
+    local localZone = false
+    if GQ.Core and GQ.Core.QuestInCurrentZone then
+      localZone = GQ.Core:QuestInCurrentZone({ questID = qid, title = info.title }) and true or false
     end
-    if qid then
-      local skip = false
-      if self:IsQuestHidden(qid, q.title) then skip = true end
-      if GQ.Core and GQ.Core.IsTrackedInLog and not GQ.Core:IsTrackedInLog(q) then skip = true end
-      if GQ.Core and GQ.Core.ShouldHideQuest and GQ.Core:ShouldHideQuest(q) then skip = true end
-      if zoneOnly and GQ.Core and GQ.Core.QuestInCurrentZone and not GQ.Core:QuestInCurrentZone(q) then skip = true end
-      if not skip then
-        if cfg.showObjectives or cfg.showGivers or cfg.showTurnins then
-          local qdata = DB:GetQuest(qid)
-          if qdata then
-            if gen ~= self._buildGen then return end
-            self:AddQuestNodes(qid, qdata, q.title, q.complete)
-            pinned = pinned + 1
-          else
-            GQ:Debug("No qdata for", qid, q.title)
-          end
-        end
-      end
+    table.insert(jobs, { qid = qid, title = info.title, complete = info.complete, localZone = localZone })
+  end
+  table.sort(jobs, function(a, b)
+    if a.localZone ~= b.localZone then return a.localZone end
+    return tostring(a.qid) < tostring(b.qid)
+  end)
+
+  local i = 0
+  local function paintLocal()
+    Map._miniNeedsFull = true
+    Map._clustersDirty = true
+    Map._worldPaintKey = nil
+    Map._nodeRev = (Map._nodeRev or 0) + 1
+    Map:UpdateMinimapPins()
+    if WorldMapFrame and (WorldMapFrame:IsVisible() or WorldMapFrame:IsShown()) then
+      Map:UpdateWorldPins()
+    end
+  end
+  local function finish()
+    if gen ~= Map._buildGen then return end
+    Map:BuildAvailableNodes()
+    if GQ.Tracking and GQ.Tracking.BuildNodes then
+      GQ.Tracking:BuildNodes()
+    end
+    paintLocal()
+    Map:DrawAllPins()
+    GQ:Debug("Map pinned quests from log:", getn(jobs))
+  end
+  local function step()
+    if gen ~= Map._buildGen then return end
+    i = i + 1
+    if i > getn(jobs) then
+      finish()
+      return
+    end
+    local job = jobs[i]
+    local qdata = GQ.Database:GetQuest(job.qid)
+    if qdata then
+      Map:AddQuestNodes(job.qid, qdata, job.title, job.complete == 1)
+      Map._pinnedLog[job.qid] = job.complete
+    end
+    -- Minimap is on-screen at login: paint as soon as a local quest lands.
+    if job.localZone or i == 1 then
+      paintLocal()
+    end
+    if GQ.Scheduler then
+      GQ.Scheduler:Enqueue(step, "log pins", "log-pins")
     else
-      GQ:Debug("Unresolved quest title:", q.title)
+      step()
     end
   end
-  GQ:Debug("Map pinned quests from log:", pinned)
-
-  self:BuildAvailableNodes()
-  if GQ.Tracking and GQ.Tracking.BuildNodes then
-    GQ.Tracking:BuildNodes()
+  if getn(jobs) == 0 then
+    finish()
+  elseif GQ.Scheduler then
+    GQ.Scheduler:Enqueue(step, "log pins", "log-pins")
+  else
+    step()
   end
-  self._miniNeedsFull = true
-  self:DrawAllPins()
+end
+
+function Map:SchedulePinLoad()
+  if self._pinLoadArmed then return end
+  self._pinLoadArmed = true
+  if self.ResolvePlayerZone then self:ResolvePlayerZone() end
+  -- Quest-log pins for the current zone start on the next frame so
+  -- PLAYER_LOGIN can finish, but the minimap is not left empty.
+  if GQ.Scheduler then
+    GQ.Scheduler:After(0.05, function()
+      if not Map._pinsPrimed then
+        Map:BuildNodesFromQuestLog()
+      else
+        Map._miniNeedsFull = true
+        Map:UpdateMinimapPins()
+      end
+    end, "pins-ready")
+  end
 end
 
 function Map:BuildAvailableNodes()
@@ -2926,7 +3881,7 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
     local oi
     for oi = 1, getn(logQuest.objectives) do
       local o = logQuest.objectives[oi]
-      if o and o.finished and o.text then
+      if o and o.text and Map:ObjectiveLineDone(o) then
         if string.find(string.lower(o.text), nl, 1, true) then
           return true
         end
@@ -2961,7 +3916,7 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
         return
       end
     end
-    if isUnit then
+    if isUnit and cfg and cfg.showPaths then
       self:LoadPathsForUnit(id, title)
     end
     local entry = isUnit and DB:GetUnit(id) or DB:GetObject(id)
@@ -3014,6 +3969,7 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
           itemID = extra.itemID,
           itemName = extra.itemName,
           dropChance = extra.dropChance,
+          lootItems = extra.lootItems,
           talkTo = extra.talkTo,
           level = extra.level,
           mobLevel = extra.mobLevel,
@@ -3024,6 +3980,26 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
 
   -- In-progress: do NOT show available "!" at giver. Show "?" at turn-in.
   -- Grey "?" while incomplete; normal yellow "?" when complete (ready to turn in).
+  local function TextLooksLikeTalk(text, otype)
+    local tx = string.lower(text or "")
+    local ot = string.lower(otype or "")
+    if tx == "" then return false end
+    if string.find(tx, "slain", 1, true) or string.find(tx, "killed", 1, true) then
+      return false
+    end
+    if ot == "item" or ot == "object" then return false end
+    if string.find(tx, "talk to", 1, true) or string.find(tx, "speak with", 1, true)
+       or string.find(tx, "speak to", 1, true) or string.find(tx, "speak ", 1, true)
+       or string.find(tx, "report to", 1, true) or string.find(tx, "seek out", 1, true)
+       or string.find(tx, "find ", 1, true) or string.find(tx, "locate ", 1, true)
+       or string.find(tx, "visit ", 1, true) or string.find(tx, "meet ", 1, true)
+       or string.find(tx, "ask ", 1, true) or string.find(tx, "deliver", 1, true)
+       or string.find(tx, "bring ", 1, true) then
+      return true
+    end
+    return false
+  end
+
   local function IsTalkQuest()
     if isComplete then return false end
     if logQuest and logQuest.objectives then
@@ -3033,11 +4009,12 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
         local o = logQuest.objectives[oi]
         if o then
           local ot = string.lower(o.type or "")
-          local tx = string.lower(o.text or "")
-          if ot == "monster" or ot == "mob" or ot == "item" or ot == "object" then
+          if ot == "item" or ot == "object" then
             anyKillLoot = true
+          elseif ot == "monster" or ot == "mob" then
+            if not TextLooksLikeTalk(o.text, ot) then anyKillLoot = true end
           end
-          if ot == "event" or string.find(tx, "talk to", 1, true) or string.find(tx, "speak with", 1, true) then
+          if TextLooksLikeTalk(o.text, ot) or ot == "event" then
             anyTalk = true
           end
         end
@@ -3045,18 +4022,35 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
       if anyTalk and not anyKillLoot then return true end
       if getn(logQuest.objectives) == 0 then return true end
     end
-    if qdata and qdata["obj"] then
-      if qdata["obj"]["U"] or qdata["obj"]["I"] or qdata["obj"]["O"] then
-        return false
-      end
+    if qdata and qdata["obj"] and (qdata["obj"]["I"] or qdata["obj"]["O"]) then
+      return false
+    end
+    if qdata and qdata["obj"] and qdata["obj"]["U"] then
+      return false
     end
     return true
   end
 
+  local function UnitLooksLikeTalk(uid)
+    if not logQuest or not logQuest.objectives then return false end
+    local name = GreedQuestDB and GreedQuestDB.unitNames and GreedQuestDB.unitNames[uid]
+    local nl = name and string.lower(name) or nil
+    local oi
+    for oi = 1, getn(logQuest.objectives) do
+      local o = logQuest.objectives[oi]
+      if o and TextLooksLikeTalk(o.text, o.type) then
+        if not nl then return true end
+        if string.find(string.lower(o.text or ""), nl, 1, true) then return true end
+      end
+    end
+    return false
+  end
+
   if cfg.showTurnins and qdata["end"] then
-    local tex = self.ICON.turnin or self.ICON.complete
-    local grey = not isComplete
     local talkTo = IsTalkQuest()
+    local tex = (talkTo and (self.ICON.talk or self.ICON_CHOICES.gossip)) or (self.ICON.turnin or self.ICON.complete)
+    local grey = not isComplete
+    local endTyp = talkTo and "Talk" or "Turn In"
     if qdata["end"]["U"] then
       local placed = false
       local _, uid
@@ -3065,20 +4059,20 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
         if u and GQ.Core and GQ.Core.UnitFactionOk and not GQ.Core:UnitFactionOk(u) then
           -- skip opposite-faction turn-in NPC
         else
-          placeEntity(uid, true, tex, self.LAYER.turnin, "Turn In", grey, { talkTo = talkTo })
+          placeEntity(uid, true, tex, self.LAYER.turnin, endTyp, grey, { talkTo = talkTo })
           placed = true
         end
       end
       -- If every end NPC was opposite faction, fall back to all (neutral data gaps)
       if not placed then
         for _, uid in pairs(qdata["end"]["U"]) do
-          placeEntity(uid, true, tex, self.LAYER.turnin, "Turn In", grey, { talkTo = talkTo })
+          placeEntity(uid, true, tex, self.LAYER.turnin, endTyp, grey, { talkTo = talkTo })
         end
       end
     end
     if qdata["end"]["O"] then
       for _, oid in pairs(qdata["end"]["O"]) do
-        placeEntity(oid, false, tex, self.LAYER.turnin, "Turn In", grey, { talkTo = talkTo })
+        placeEntity(oid, false, tex, self.LAYER.turnin, endTyp, grey, { talkTo = talkTo })
       end
     end
   end
@@ -3089,7 +4083,11 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
     -- Kill / talk NPCs
     if qdata["obj"]["U"] then
       for _, uid in pairs(qdata["obj"]["U"]) do
-        placeEntity(uid, true, self.ICON.kill, self.LAYER.objective, "Kill")
+        if UnitLooksLikeTalk(uid) then
+          placeEntity(uid, true, self.ICON.talk or self.ICON_CHOICES.gossip, self.LAYER.objective, "Talk", nil, { talkTo = true })
+        else
+          placeEntity(uid, true, self.ICON.kill, self.LAYER.objective, "Kill")
+        end
       end
     end
     -- World objects to interact with
@@ -3188,15 +4186,54 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
     end
     if qdata["obj"]["I"] and not skipLoot then
       for _, itemID in pairs(qdata["obj"]["I"]) do
-        local item = DB:GetItem(itemID)
+        -- Skip this item if its own quest-log line is already finished
+        if logQuest and logQuest.objectives then
+          local itemNameGuess = DB.GetItemName and DB:GetItemName(itemID, qid)
+          local finishedThis = false
+          local oi
+          for oi = 1, getn(logQuest.objectives) do
+            local o = logQuest.objectives[oi]
+            if o and Map:ObjectiveLineDone(o) and string.lower(o.type or "") == "item" then
+              if itemNameGuess and o.text and string.find(string.lower(o.text), string.lower(itemNameGuess), 1, true) then
+                finishedThis = true
+                break
+              end
+            end
+          end
+          if finishedThis then
+            itemID = nil
+          end
+        end
+        local item = itemID and DB:GetItem(itemID)
+        if item and not item.U and item._U and DB.UnpackDropData then
+          item.U = DB.UnpackDropData(item._U)
+        end
+        if item and not item.O and item._O and DB.UnpackDropData then
+          item.O = DB.UnpackDropData(item._O)
+        end
         if item then
-          local itemName = nil
+          local itemName = (DB.GetItemName and DB:GetItemName(itemID, qid)) or nil
+          local bestChance = 0
+          local function scanBest(m)
+            if not m then return end
+            local _, ch
+            for _, ch in pairs(m) do
+              ch = tonumber(ch) or 0
+              if ch > bestChance then bestChance = ch end
+            end
+          end
+          scanBest(item.U)
+          scanBest(item.O)
           local function placeDrops(dropMap, isUnit)
             if not dropMap then return end
             local rareZones = {}
             local eid, chance
             for eid, chance in pairs(dropMap) do
               chance = tonumber(chance) or 0
+              -- Skip junk drops (≤5%) when the item has a real source above 5%.
+              if chance > 0 and chance <= 5 and bestChance > 5 then
+                chance = 0
+              end
               if chance > 0 and chance < 1 then
                 local entry = isUnit and DB:GetUnit(eid) or DB:GetObject(eid)
                 if entry and entry.coords then
@@ -3218,7 +4255,8 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
                 end
               else
                 placeEntity(eid, isUnit, self.ICON.loot, self.LAYER.objective, "Loot", nil, {
-                  itemID = itemID, itemName = itemName, dropChance = chance
+                  itemID = itemID, itemName = itemName, dropChance = chance,
+                  lootItems = { { id = itemID, name = itemName, chance = chance } },
                 })
               end
             end
@@ -3240,6 +4278,7 @@ function Map:AddQuestNodes(qid, qdata, title, isComplete)
                   itemName = itemName,
                   dropChance = b.chance,
                   rareArea = true,
+                  lootItems = { { id = itemID, name = itemName, chance = b.chance } },
                 })
               end
             end
@@ -3632,16 +4671,10 @@ Map.highlightTitle   = nil
 function Map:ClearHighlight()
   self.highlightQuestID = nil
   self.highlightTitle = nil
-  -- Reset pin sizes/alphas
+  -- Do not rewrite pin sizes here. Hardcoded 16/18 overwrote zone
+  -- sizes, and the next map-open often skipped a full paint.
   for _, pin in ipairs(self.worldPins) do
     if pin.node then
-      if pin.node.isCluster then
-        pin:SetWidth(18)
-        pin:SetHeight(18)
-      else
-        pin:SetWidth(16)
-        pin:SetHeight(16)
-      end
       pin:SetAlpha(1)
     end
   end
@@ -3700,8 +4733,11 @@ function Map:ApplyHighlight()
       if self.highlightQuestID and n.questID == self.highlightQuestID then match = true end
       if self.highlightTitle and n.title == self.highlightTitle then match = true end
       if match then
-        pin:SetWidth(22)
-        pin:SetHeight(22)
+        local w = pin:GetWidth() or 12
+        if w < 14 then
+          pin:SetWidth(w + 3)
+          pin:SetHeight(w + 3)
+        end
         pin:SetAlpha(1)
       else
         pin:SetAlpha(0.35)
@@ -3729,12 +4765,17 @@ function Map:HideBlizzardQuestPOIs()
   mute(getglobal("QuestPOIFrame"))
   mute(getglobal("QuestMapFrame"))
   mute(getglobal("MiniMapQuestFrame"))
+  mute(getglobal("MiniMapPOIFrame"))
+  mute(getglobal("MinimapQuestPOIFrame"))
   mute(getglobal("WatchFrameLines"))
   local i
   for i = 1, 40 do
     mute(getglobal("QuestPOI_" .. i))
     mute(getglobal("WorldMapQuestPOI" .. i))
     mute(getglobal("WorldMapBlob"..i))
+    mute(getglobal("MiniMapQuestPOI" .. i))
+    mute(getglobal("MinimapQuestPOI" .. i))
+    mute(getglobal("MiniMapPOI" .. i))
   end
   local function hideQuestTex(frame)
     if not frame or type(frame) ~= "table" then return end
@@ -3745,8 +4786,15 @@ function Map:HideBlizzardQuestPOIs()
         if string.find(tex, "questpoi", 1, true)
            or string.find(tex, "questblob", 1, true)
            or string.find(tex, "ui-questpoi", 1, true)
-           or string.find(tex, "questobjective", 1, true) then
-          mute(frame)
+           or string.find(tex, "questobjective", 1, true)
+           or string.find(tex, "poiicons", 1, true)
+           or string.find(tex, "objecticons", 1, true)
+           or string.find(tex, "questnormal", 1, true)
+           or string.find(tex, "questcomplete", 1, true) then
+          local nm = frame.GetName and frame:GetName()
+          if not (nm and string.find(nm, "GQMini", 1, true) == 1) then
+            mute(frame)
+          end
         end
       end
     end
@@ -3777,8 +4825,10 @@ end
 function Map:Init()
   self:ApplyIconStyle()
   if self.HideBlizzardQuestPOIs then self:HideBlizzardQuestPOIs() end
+  self:EnsureHoverWatcher()
   self:EnsureWorldPool()
   self:EnsureMiniPool()
+  self:SchedulePinLoad()
 
   local f = CreateFrame("Frame")
   f:RegisterEvent("WORLD_MAP_UPDATE")
@@ -3831,7 +4881,12 @@ function Map:Init()
     if (not any) and not Map._miniNeedsFull then
       return
     end
-    local lx, ly = GetPlayerMapPosition("player")
+    local lx, ly
+    if Map.GetPlayerZonePosition then
+      lx, ly = Map:GetPlayerZonePosition()
+    else
+      lx, ly = GetPlayerMapPosition("player")
+    end
     if lx and ly and Map._lastMiniAssignX then
       local dx = lx - Map._lastMiniAssignX
       local dy = ly - (Map._lastMiniAssignY or 0)
@@ -3853,6 +4908,8 @@ function Map:Init()
     local prevShow = WorldMapFrame:GetScript("OnShow")
     WorldMapFrame:SetScript("OnShow", function()
       if prevShow then prevShow() end
+      Map._worldPaintDone = false
+      Map._worldPaintKey = nil
       Map:ResolvePlayerZone()
       if not Map._wmShowFrame then Map._wmShowFrame = CreateFrame("Frame") end
       local wf = Map._wmShowFrame

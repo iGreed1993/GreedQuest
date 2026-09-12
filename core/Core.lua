@@ -204,7 +204,7 @@ end
 
 -- Score a candidate quest ID for this player (higher = better). Used when
 -- multiple quests share the same title (e.g. Art of the Armorsmith A/H).
-function Core:ScoreQuestCandidate(qid)
+function Core:ScoreQuestCandidate(qid, hint)
   local qdata = GQ.Database and GQ.Database:GetQuest(qid)
   if not qdata then return 0 end
   local score = 1
@@ -230,10 +230,44 @@ function Core:ScoreQuestCandidate(qid)
     local uid = self:PreferFactionUnitId(qdata["end"]["U"])
     if uid then score = score + 10 end
   end
+  -- Same title used by a chain (Westfall Stew 36 vs 38). Match log level
+  -- and whether the DB quest actually has the objectives we see.
+  if hint then
+    local qlvl = tonumber(qdata["lvl"] or qdata["min"] or 0) or 0
+    local hlvl = tonumber(hint.level or hint.lvl or 0) or 0
+    if hlvl > 0 and qlvl > 0 then
+      if qlvl == hlvl then
+        score = score + 120
+      else
+        score = score - math.abs(qlvl - hlvl) * 8
+      end
+    end
+    local objs = hint.objectives
+    local nobj = objs and getn(objs) or 0
+    local hasI = qdata["obj"] and qdata["obj"]["I"]
+    local hasU = qdata["obj"] and qdata["obj"]["U"]
+    if nobj > 0 then
+      local anyItem, anyMob = false, false
+      local oi
+      for oi = 1, nobj do
+        local ot = string.lower((objs[oi] and objs[oi].type) or "")
+        if ot == "item" then anyItem = true end
+        if ot == "monster" or ot == "mob" then anyMob = true end
+      end
+      if anyItem and hasI then score = score + 80 end
+      if anyItem and not hasI then score = score - 90 end
+      if anyMob and hasU then score = score + 50 end
+      if anyMob and not hasU and not hasI then score = score - 40 end
+      if not qdata["obj"] then score = score - 70 end
+    elseif qdata["obj"] and (hasI or hasU) then
+      -- Title-only resolve with no log objectives: prefer the earlier chain step
+      score = score - 5
+    end
+  end
   return score
 end
 
-function Core:ResolveQuestID(title)
+function Core:ResolveQuestID(title, hint)
   if not title then return nil end
   if not self.titleIndex then self:BuildTitleIndex() end
   if not self.titleIndex then return nil end
@@ -248,7 +282,7 @@ function Core:ResolveQuestID(title)
     local bestId, bestScore = list[1], -9999
     local i
     for i = 1, table.getn(list) do
-      local s = self:ScoreQuestCandidate(list[i])
+      local s = self:ScoreQuestCandidate(list[i], hint)
       if s > bestScore then
         bestScore = s
         bestId = list[i]
@@ -705,9 +739,9 @@ function Core:ScanQuestLog()
       -- Blizzard / Turtle quest log zone or category header (e.g. "Gilneas City", "Blacksmithing")
       currentHeader = title
     elseif title and not isHeader then
-      local qid = self:ResolveQuestID(title)
+      local qid = self:ResolveQuestID(title, { level = level })
       if not qid and title then
-        qid = self:ResolveQuestID(self:NormalizeTitle(title))
+        qid = self:ResolveQuestID(self:NormalizeTitle(title), { level = level })
       end
       if SelectQuestLogEntry then
         SelectQuestLogEntry(i)
@@ -757,6 +791,12 @@ function Core:ScanQuestLog()
             index = 1,
           })
         end
+      end
+
+      -- Duplicate titles (Westfall Stew 36/38): re-score now that we have objectives.
+      if title and objectives and getn(objectives) > 0 then
+        local refined = self:ResolveQuestID(title, { level = level, objectives = objectives })
+        if refined then qid = refined end
       end
 
       local entry = {
@@ -862,22 +902,21 @@ function Core:ScanQuestLog()
   self._lastQuestSetKey = setKey
   self._lastStructKey = progKey
 
+  -- Rebuild pins when an objective line finishes (Murloc Eye 3/3), not
+  -- only when the whole quest completes.
+  if GQ.Map and GQ.Map.SyncQuestLogNodes then
+    GQ.Map:SyncQuestLogNodes()
+  elseif structureChanged and GQ.Map and GQ.Map.BuildNodesFromQuestLog then
+    GQ.Map:BuildNodesFromQuestLog()
+  end
   if structureChanged or self._needAvailableRefresh then
     self._needAvailableRefresh = nil
     self:InvalidateAvailableCache()
     self:StartEligibleScan()
-    if GQ.Map and GQ.Map.BuildNodesFromQuestLog then
-      GQ.Map:BuildNodesFromQuestLog()
-    end
     self:ScheduleAvailableRefresh()
   end
 
   if GQ.Tracker and GQ.Tracker.Refresh then GQ.Tracker:Refresh() end
-  -- Progress-only: still refresh map greys for turn-ins if complete flipped
-  if structureChanged and GQ.Map and GQ.Map.UpdateMinimapPins then
-    GQ.Map._miniNeedsFull = true
-    GQ.Map:UpdateMinimapPins()
-  end
 end
 
 function Core:GetQuestByIndex(index)
@@ -1232,7 +1271,9 @@ function Core:StartEligibleScan()
         Core.availableCache = Core:FilterEligibleToAvailable(state.results)
         Core.scanState = nil
         GQ:Debug("Available scan done (" .. getn(Core.availableCache) .. " shown)")
-        if GQ.Map and GQ.Map.BuildNodesFromQuestLog then
+        if GQ.Map and GQ.Map.RefreshAvailablePins then
+          GQ.Map:RefreshAvailablePins()
+        elseif GQ.Map and GQ.Map.BuildNodesFromQuestLog then
           GQ.Map:BuildNodesFromQuestLog()
         end
       else
@@ -1293,8 +1334,8 @@ function Core:ScheduleAvailableRefresh()
     f:SetScript("OnUpdate", nil)
     Core:InvalidateAvailableCache()
     Core:StartEligibleScan()
-    if GQ.Map and GQ.Map.BuildNodesFromQuestLog then
-      GQ.Map:BuildNodesFromQuestLog()
+    if GQ.Map and GQ.Map.RefreshAvailablePins then
+      GQ.Map:RefreshAvailablePins()
     end
   end)
 end

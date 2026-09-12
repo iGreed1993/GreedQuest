@@ -1,6 +1,7 @@
 --[[
   GreedQuest Optional Tracking
-  Flight masters, mailboxes, innkeepers, repair vendors
+  Flight, mail, inns, repair, spirit healers, stables,
+  class trainers (current class only), rares, chests, rental mounts
 ]]
 
 GreedQuest = GreedQuest or {}
@@ -14,7 +15,13 @@ Track.KINDS = {
   { key = "flight",    label = "Flight masters",  icon = "Interface\\AddOns\\GreedQuest\\media\\flight" },
   { key = "mailbox",   label = "Mailboxes",       icon = "Interface\\AddOns\\GreedQuest\\media\\mailbox" },
   { key = "innkeeper", label = "Innkeepers",      icon = "Interface\\AddOns\\GreedQuest\\media\\innkeeper" },
-  { key = "repair",    label = "Repair vendors",  icon = "Interface\\AddOns\\GreedQuest\\media\\repair" },
+  { key = "repair",       label = "Repair vendors",   icon = "Interface\\AddOns\\GreedQuest\\media\\repair" },
+  { key = "spirithealer", label = "Spirit healers",   icon = "Interface\\AddOns\\GreedQuest\\media\\spirithealer" },
+  { key = "classtrainer", label = "Class trainers",   icon = "Interface\\AddOns\\GreedQuest\\media\\classtrainer" },
+  { key = "stablemaster", label = "Stable masters",   icon = "Interface\\AddOns\\GreedQuest\\media\\stablemaster" },
+  { key = "rares",        label = "Rare spawns",      icon = "Interface\\AddOns\\GreedQuest\\media\\rares" },
+  { key = "chests",       label = "Chests",           icon = "Interface\\AddOns\\GreedQuest\\media\\chests" },
+  { key = "rental",       label = "Rental mounts",    icon = "Interface\\AddOns\\GreedQuest\\media\\rental" },
 }
 
 local function PlayerFactionCode()
@@ -26,10 +33,23 @@ end
 
 local function FactionOk(tag)
   if not tag or tag == "" or tag == "AH" then return true end
+  if type(tag) == "number" then return true end
+  local s = tostring(tag)
+  if tonumber(s) then return true end
   local pf = PlayerFactionCode()
   if pf == "AH" then return true end
-  if tag == "AH" then return true end
-  return tag == pf
+  if s == "AH" then return true end
+  return s == pf
+end
+
+local function PlayerClassToken()
+  local _, token = UnitClass("player")
+  return string.upper(token or "")
+end
+
+local function TrainerOk(tag)
+  if not tag or tag == "" then return true end
+  return string.upper(tostring(tag)) == PlayerClassToken()
 end
 
 function Track:IsEnabled(kind)
@@ -83,21 +103,50 @@ function Track:BuildNodes()
     mailbox = "Mailbox",
     innkeeper = "Innkeeper",
     repair = "Repair Vendor",
+    spirithealer = "Spirit Healer",
+    classtrainer = "Class Trainer",
+    stablemaster = "Stable Master",
+    rares = "Rare Spawn",
+    chests = "Chest",
+    rental = "Rental Mount",
   }
+  local objectKinds = { mailbox = 1, chests = 1 }
 
   local ki
   for ki = 1, table.getn(self.KINDS) do
     local kind = self.KINDS[ki]
     if self:IsEnabled(kind.key) then
+      if kind.key == "rental" then
+        local spots = GreedQuestDB.trackingRental
+        if spots then
+          local si
+          for si = 1, getn(spots) do
+            local s = spots[si]
+            if s and s[1] and s[2] and s[3] then
+              GQ.Map:AddNode({
+                mapID = s[1], x = s[2], y = s[3],
+                title = s[4] or "Rental Mount",
+                quest = s[4] or "Rental Mount",
+                texture = kind.icon, layer = 2,
+                typ = "rental", source = "tracking",
+              })
+            end
+          end
+        end
+      else
       local list = meta[kind.key]
       if list then
         local id, tag
         for id, tag in pairs(list) do
-          if FactionOk(tostring(tag)) then
+          local ok = FactionOk(tag)
+          if kind.key == "classtrainer" then
+            ok = TrainerOk(tag)
+          end
+          if ok then
             local absId = tonumber(id) or 0
             if absId < 0 then absId = -absId end
             local entry
-            if kind.key == "mailbox" then
+            if objectKinds[kind.key] then
               entry = DB:GetObject(absId)
             else
               entry = DB:GetUnit(absId)
@@ -108,6 +157,7 @@ function Track:BuildNodes()
             end
           end
         end
+      end
       end
     end
   end
@@ -276,6 +326,12 @@ function Track:Init()
       mailbox = false,
       innkeeper = false,
       repair = false,
+      spirithealer = false,
+      classtrainer = false,
+      stablemaster = false,
+      rares = false,
+      chests = false,
+      rental = false,
     }
   end
 end

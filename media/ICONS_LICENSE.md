@@ -17,8 +17,9 @@ Source: Questie `Icons/*.blp` — https://github.com/Questie/Questie
 ## Tracking icons (MIT)
 
 - `mailbox.tga`, `flight.tga`, `innkeeper.tga`, `repair.tga`
+- `spirithealer.tga`, `stablemaster.tga`, `rares.tga`, `chests.tga`, `classtrainer.tga` (vendor glyph)
 
-From pfQuest / Questie-derived tracking icon sets.
+From pfQuest `img/tracking/`. `rental.tga` is Questie `Icons/mount_up.tga`.
 
 ## GreedQuest
 

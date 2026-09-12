@@ -13,6 +13,51 @@ local GQ = GreedQuest
 GQ.Tooltips = GQ.Tooltips or {}
 local Tooltips = GQ.Tooltips
 
+local WRAP_COLS = 58
+
+local function WrapLines(text)
+  local out = {}
+  if not text or text == "" then return out end
+  text = string.gsub(text, "\r", "")
+  -- Honor existing line breaks first
+  local chunk
+  while text and text ~= "" do
+    local br = string.find(text, "\n", 1, true)
+    if br then
+      chunk = string.sub(text, 1, br - 1)
+      text = string.sub(text, br + 1)
+    else
+      chunk = text
+      text = ""
+    end
+    chunk = string.gsub(chunk, "^%s+", "")
+    chunk = string.gsub(chunk, "%s+$", "")
+    while string.len(chunk) > WRAP_COLS do
+      local cut = WRAP_COLS
+      local i = WRAP_COLS
+      while i > 24 do
+        if string.sub(chunk, i, i) == " " then
+          cut = i
+          break
+        end
+        i = i - 1
+      end
+      table.insert(out, string.sub(chunk, 1, cut))
+      chunk = string.gsub(string.sub(chunk, cut + 1), "^%s+", "")
+    end
+    if chunk ~= "" then table.insert(out, chunk) end
+  end
+  return out
+end
+
+function Tooltips:AddWrapped(text, r, g, b)
+  local lines = WrapLines(text)
+  local i
+  for i = 1, getn(lines) do
+    GameTooltip:AddLine(lines[i], r, g, b)
+  end
+end
+
 local function StripColors(s)
   if not s then return "" end
   return string.gsub(s, "|c%x%x%x%x%x%x%x%x", "")
@@ -92,7 +137,8 @@ local function LogCacheKey()
   return table.concat(parts, "|")
 end
 
--- Build map of lower(unitName) -> list of { quest=q, objectives={obj,...} }
+-- Build map of lower(unitName) -> list of { quest=q, objectives={obj,...}, dropChances={[text]=pct} }
+-- Each dropper only gets the item objective(s) that unit actually drops.
 function Tooltips:GetItemDropperMap()
   local key = LogCacheKey()
   if self._dropperCache and self._dropperCacheKey == key then
@@ -109,35 +155,62 @@ function Tooltips:GetItemDropperMap()
     return map
   end
 
+  local function ItemObjFor(q, itemID, itemName)
+    if not q.objectives then return nil end
+    local needle = itemName and Lower(itemName) or nil
+    local itemObjs = {}
+    local _, obj
+    for _, obj in ipairs(q.objectives) do
+      if LooksLikeItemObjective(obj.text, Lower(obj.type or "")) then
+        if needle and obj.text and string.find(Lower(obj.text), needle, 1, true) then
+          return obj
+        end
+        table.insert(itemObjs, obj)
+      end
+    end
+    -- Single item-objective quest: that line is the drop.
+    if getn(itemObjs) == 1 then return itemObjs[1] end
+    return nil
+  end
+
   for _, q in pairs(log) do
     if q.questID and q.objectives then
       local qdata = DB:GetQuest(q.questID)
       local itemIds = qdata and qdata["obj"] and qdata["obj"]["I"]
       if itemIds then
-        -- Collect item-type objective lines for this quest
-        local itemObjs = {}
-        for _, obj in ipairs(q.objectives) do
-          if LooksLikeItemObjective(obj.text, Lower(obj.type or "")) then
-            table.insert(itemObjs, obj)
-          end
-        end
-        if getn(itemObjs) > 0 then
-          for _, itemID in pairs(itemIds) do
-            local item = DB:GetItem(itemID)
-            if item and item.U then
-              for uid, chance in pairs(item.U) do
-                local uname = names[uid]
-                if uname and uname ~= "" then
-                  local ln = Lower(uname)
-                  if not map[ln] then map[ln] = {} end
-                  -- avoid duplicate quest entries
-                  local found = false
-                  for _, entry in ipairs(map[ln]) do
-                    if entry.quest == q then found = true break end
-                  end
-                  if not found then
-                    table.insert(map[ln], { quest = q, objectives = itemObjs, dropChance = chance })
-                  end
+        for _, itemID in pairs(itemIds) do
+          local item = DB:GetItem(itemID)
+          local itemName = DB.GetItemName and DB:GetItemName(itemID, q.questID)
+          local matchedObj = ItemObjFor(q, itemID, itemName)
+          if item and item.U and matchedObj and not matchedObj.finished then
+            for uid, chance in pairs(item.U) do
+              local uname = names[uid]
+              if uname and uname ~= "" then
+                local ln = Lower(uname)
+                if not map[ln] then map[ln] = {} end
+                local entry = nil
+                local _, e
+                for _, e in ipairs(map[ln]) do
+                  if e.quest == q then entry = e break end
+                end
+                if not entry then
+                  entry = { quest = q, objectives = {}, dropChances = {} }
+                  table.insert(map[ln], entry)
+                end
+                local already = false
+                local _, obj
+                for _, obj in ipairs(entry.objectives) do
+                  if obj == matchedObj then already = true break end
+                end
+                if not already then
+                  table.insert(entry.objectives, matchedObj)
+                end
+                if matchedObj.text then
+                  entry.dropChances[matchedObj.text] = chance
+                end
+                -- keep a representative chance for older tooltip code
+                if chance and (not entry.dropChance or chance > entry.dropChance) then
+                  entry.dropChance = chance
                 end
               end
             end
@@ -210,11 +283,33 @@ function Tooltips:FindRelatedQuests(name, isUnit)
         if not seenQuest[entry.quest] then
           seenQuest[entry.quest] = true
           table.insert(results, entry)
-        elseif entry.dropChance then
+        else
           local _, r
           for _, r in ipairs(results) do
             if r.quest == entry.quest then
-              r.dropChance = entry.dropChance
+              if entry.dropChance then r.dropChance = entry.dropChance end
+              if entry.dropChances then
+                r.dropChances = r.dropChances or {}
+                local k, v
+                for k, v in pairs(entry.dropChances) do
+                  r.dropChances[k] = v
+                end
+              end
+              if entry.objectives then
+                r.objectives = r.objectives or {}
+                local _, obj
+                for _, obj in ipairs(entry.objectives) do
+                  local have = false
+                  local __, existing
+                  for __, existing in ipairs(r.objectives) do
+                    if existing == obj or (existing.text and obj.text and existing.text == obj.text) then
+                      have = true
+                      break
+                    end
+                  end
+                  if not have then table.insert(r.objectives, obj) end
+                end
+              end
               break
             end
           end
@@ -369,7 +464,7 @@ function Tooltips:AppendShiftObjectives(name)
         GameTooltip:AddLine(" ")
         any = true
       end
-      GameTooltip:AddLine(objText, 0.92, 0.92, 0.92)
+      self:AddWrapped(objText, 0.92, 0.92, 0.92)
     end
   end
   for i = 1, getn(turn) do
@@ -420,23 +515,30 @@ function Tooltips:AppendQuestProgress(name, isUnit)
     GameTooltip:AddLine(q.title or "Quest", 1, 0.85, 0.2)
 
     for _, obj in ipairs(entry.objectives) do
+      local t = obj.text or ""
+      local c = nil
+      if entry.dropChances and obj.text then
+        c = entry.dropChances[obj.text]
+      end
+      if (not c or c <= 0) and entry.dropChance then
+        c = entry.dropChance
+      end
+      if isUnit and c and c > 0 then
+        local txt
+        if c >= 10 then
+          txt = string.format("%.0f%%", c)
+        elseif c >= 1 then
+          txt = string.format("%.1f%%", c)
+        else
+          txt = string.format("%.2f%%", c)
+        end
+        t = t .. "  (" .. txt .. ")"
+      end
       if obj.finished then
-        GameTooltip:AddLine("  |cff55ff55" .. (obj.text or "") .. "|r")
+        self:AddWrapped(t, 0.33, 1.0, 0.33)
       else
-        GameTooltip:AddLine("  |cffffffff" .. (obj.text or "") .. "|r")
+        self:AddWrapped(t, 1, 1, 1)
       end
-    end
-    if isUnit and entry.dropChance and entry.dropChance > 0 then
-      local c = entry.dropChance
-      local txt
-      if c >= 10 then
-        txt = string.format("%.0f%%", c)
-      elseif c >= 1 then
-        txt = string.format("%.1f%%", c)
-      else
-        txt = string.format("%.2f%%", c)
-      end
-      GameTooltip:AddLine("  Drop chance  " .. txt, 0.55, 0.85, 1)
     end
 
     local showParty = not (GreedQuestConfig and GreedQuestConfig.tooltips and GreedQuestConfig.tooltips.showParty == false)

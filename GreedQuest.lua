@@ -85,6 +85,12 @@ GQ.defaults = {
     mailbox = false,
     innkeeper = false,
     repair = false,
+    spirithealer = false,
+    classtrainer = false,
+    stablemaster = false,
+    rares = false,
+    chests = false,
+    rental = false,
   },
   general = {
     autoTrack = true,
